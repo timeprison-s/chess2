@@ -56,7 +56,7 @@ function makeRoom(code) {
         code, board: initialBoard(), players: {white:null, black:null}, currentTurn:"white",
         extraTurns:{white:0,black:0}, frozenTurns:{white:0,black:0},
         deadPieces:{white:[],black:[]}, moves:[], moveCount:0,
-        score:{white:0,black:0}, time:{white:600,black:600}, gameEnded:false,
+        score:{white:0,black:0}, time:{white:600,black:600}, gameEnded:false, gameStarted:false,
         castling:{white:{king:false, queen:false}, black:{king:false, queen:false}},
         colossusUsed:{white:false,black:false},
         hypnotizing:{white:null,black:null}
@@ -165,7 +165,7 @@ function completeHypnosis(room,color){
 }
 
 function broadcast(room){
-    const data=JSON.stringify({type:"state",board:room.board,currentTurn:room.currentTurn,moves:room.moves,time:room.time,gameEnded:room.gameEnded,moveCount:room.moveCount,score:room.score,players:{white:!!room.players.white,black:!!room.players.black},colossusReady:{white:room.moveCount>=30&&hasColossusResources(room,"white")&&!room.colossusUsed.white,black:room.moveCount>=30&&hasColossusResources(room,"black")&&!room.colossusUsed.black},hypnotizing:room.hypnotizing});
+    const data=JSON.stringify({type:"state",board:room.board,currentTurn:room.currentTurn,moves:room.moves,time:room.time,gameEnded:room.gameEnded,gameStarted:room.gameStarted,moveCount:room.moveCount,score:room.score,players:{white:!!room.players.white,black:!!room.players.black},colossusReady:{white:room.moveCount>=30&&hasColossusResources(room,"white")&&!room.colossusUsed.white,black:room.moveCount>=30&&hasColossusResources(room,"black")&&!room.colossusUsed.black},hypnotizing:room.hypnotizing});
     for(const color of ["white","black"]){const ws=room.players[color];if(ws&&ws.readyState===WebSocket.OPEN)ws.send(data);}
 }
 function sendError(ws,message){ws.send(JSON.stringify({type:"error",message}));}
@@ -192,6 +192,7 @@ function handleAction(room,ws,action){
     }
 
     if(action.type==="move"){
+        if(!Number.isInteger(action.fr)||!Number.isInteger(action.fc)||!Number.isInteger(action.tr)||!Number.isInteger(action.tc)){sendError(ws,"잘못된 좌표입니다.");return;}
         const {fr,fc,tr,tc}=action; const p=room.board[fr]?.[fc],target=room.board[tr]?.[tc];
         if(!p||p.color!==color){sendError(ws,"잘못된 기물입니다.");return;}
         if(!canMove(room,fr,fc,tr,tc,true)){sendError(ws,"불가능한 이동입니다.");return;}
@@ -303,11 +304,11 @@ wss.on("connection",ws=>{
             const code=String(msg.room||"").trim().toUpperCase();if(!code){sendError(ws,"방 코드를 입력하세요.");return;}
             let room=rooms.get(code);if(!room){room=makeRoom(code);rooms.set(code,room);}
             let color=!room.players.white?"white":!room.players.black?"black":null;if(!color){sendError(ws,"방이 가득 찼습니다.");return;}
-            room.players[color]=ws;ws.room=code;ws.color=color;ws.send(JSON.stringify({type:"joined",color,room:code}));broadcast(room);return;
+            room.players[color]=ws;ws.room=code;ws.color=color; if(room.players.white&&room.players.black) room.gameStarted=true; ws.send(JSON.stringify({type:"joined",color,room:code}));broadcast(room);return;
         }
         if(msg.type==="action"){const room=rooms.get(ws.room);if(room)handleAction(room,ws,msg.action);else sendError(ws,"방을 찾을 수 없습니다.");}
     });
     ws.on("close",()=>{const room=rooms.get(ws.room);if(!room)return;if(room.players.white===ws)room.players.white=null;if(room.players.black===ws)room.players.black=null;if(!room.players.white&&!room.players.black)rooms.delete(ws.room);});
 });
-setInterval(()=>{for(const room of rooms.values()){if(room.gameEnded||!room.players.white||!room.players.black)continue;room.time[room.currentTurn]--;if(room.time[room.currentTurn]<=0){room.time[room.currentTurn]=0;room.gameEnded=true;}broadcast(room);}},1000);
+setInterval(()=>{for(const room of rooms.values()){if(room.gameEnded||!room.gameStarted||!room.players.white||!room.players.black)continue;room.time[room.currentTurn]--;if(room.time[room.currentTurn]<=0){room.time[room.currentTurn]=0;room.gameEnded=true;}broadcast(room);}},1000);
 server.listen(PORT,()=>console.log(`Custom Chess server running on http://localhost:${PORT}`));
