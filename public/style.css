@@ -168,7 +168,7 @@ body {
 
 .selected {
     outline:
-        5px solid #f0d6c7;
+        5px solid red;
 
     outline-offset: -5px;
 }
@@ -540,6 +540,26 @@ body {
         1px solid #444;
 
     color: #ccc;
+}
+
+
+#restartButton {
+    padding: 10px;
+
+    border: 0;
+    border-radius: 6px;
+
+    background: #3d8cff;
+    color: white;
+
+    font-size: 15px;
+
+    cursor: pointer;
+}
+
+
+#restartButton:hover {
+    background: #2f78e0;
 }
 .game-layout {
     display: flex;

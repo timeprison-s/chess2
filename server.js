@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const WebSocket = require("ws");
 
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
 const rooms = new Map();
 
@@ -342,6 +342,28 @@ function handleAction(room, ws, action) {
 
     if (!playerColor) {
         sendError(ws,"게임에 참가하지 않았습니다.");
+        return;
+    }
+
+    if (action.type === "restart") {
+
+        if (!room.gameEnded) {
+            sendError(ws,"게임이 아직 끝나지 않았습니다.");
+            return;
+        }
+
+        const fresh = makeRoom(room.code);
+
+        room.board = fresh.board;
+        room.currentTurn = fresh.currentTurn;
+        room.extraTurns = fresh.extraTurns;
+        room.frozenTurns = fresh.frozenTurns;
+        room.deadPieces = fresh.deadPieces;
+        room.moves = fresh.moves;
+        room.time = fresh.time;
+        room.gameEnded = fresh.gameEnded;
+
+        broadcast(room);
         return;
     }
 

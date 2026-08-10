@@ -1592,14 +1592,28 @@ function updateUI() {
             "status"
         );
 
+    const restartButton =
+        document.getElementById(
+            "restartButton"
+        );
+
 
     if (gameEnded) {
 
         status.textContent =
             "GAME OVER";
 
+        restartButton.classList.remove(
+            "hidden"
+        );
+
         return;
     }
+
+
+    restartButton.classList.add(
+        "hidden"
+    );
 
 
     if (
@@ -1616,6 +1630,26 @@ function updateUI() {
             "OPPONENT'S TURN";
     }
 }
+
+
+/* =====================================================
+   재시작 버튼
+===================================================== */
+
+document.getElementById(
+    "restartButton"
+).addEventListener(
+    "click",
+    () => {
+
+        /*
+         * 게임이 끝난 뒤 재시작 버튼을
+         * 누르면 방 입력 화면으로
+         * 돌아간다.
+         */
+        location.reload();
+    }
+);
 
 
 /* =====================================================
