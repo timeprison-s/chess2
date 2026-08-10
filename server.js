@@ -7,7 +7,29 @@ const PORT = process.env.PORT || 8080;
 
 const rooms = new Map();
 
+/*
+ * 특성(속성) 시스템.
+ *
+ * 장갑(armored): 룩과 결합해 만들어진 기물(포탑/전차)이 갖는다. 목숨이 2개.
+ * 관통(piercing): 이름에 "전차"나 "포"가 들어간 기물(전차/포탑)이 갖는다.
+ * 화(fire): 아직 자동으로 부여하는 규칙은 없다. 특성 자체만 우선 구현.
+ * 냉(cold): 게임 시작 시 각 진영에서 무작위로 기물 1개에 부여된다.
+ *           냉 속성 기물은 관통 또는 화 속성을 가진 공격에만 피해를 입는다.
+ */
+function computeAttributes(type) {
+    const armored = type === "turret" || type === "tank";
+    const piercing = type === "tank" || type === "turret"; // 전차 / 포(탑)
+    return {
+        armored,
+        piercing,
+        fire: false,
+        cold: false
+    };
+}
+
 function createPiece(type, color, symbol) {
+    const attributes = computeAttributes(type);
+
     return {
         type,
         color,
@@ -19,12 +41,44 @@ function createPiece(type, color, symbol) {
         turretDisabled: false,
         hasMoved: false,
         deathRow: null,
-        deathCol: null
+        deathCol: null,
+        attributes,
+        lives: attributes.armored ? 2 : 1
     };
 }
 
+/*
+ * 공격자가 방어자에게 피해를 줄 수 있는지 여부.
+ * 냉 속성 기물은 관통/화 속성 공격에만 피해를 입는다.
+ */
+function canDamage(attackerAttrs, defenderAttrs) {
+    if (!defenderAttrs?.cold) return true;
+    return !!(attackerAttrs?.piercing || attackerAttrs?.fire);
+}
+
+/*
+ * 냉 속성 무작위 부여. 킹은 제외한다(킹이 사실상 무적이 되는 것을 막기 위함).
+ */
+function assignColdAttribute(board, color) {
+    const candidates = [];
+
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            const p = board[r][c];
+            if (p && p.color === color && p.type !== "king") {
+                candidates.push(p);
+            }
+        }
+    }
+
+    if (candidates.length === 0) return;
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    chosen.attributes.cold = true;
+}
+
 function initialBoard() {
-    return [
+    const board = [
         [
             createPiece("rook","black","♜"),
             createPiece("knight","black","♞"),
@@ -70,6 +124,11 @@ function initialBoard() {
             createPiece("rook","white","♖")
         ]
     ];
+
+    assignColdAttribute(board, "white");
+    assignColdAttribute(board, "black");
+
+    return board;
 }
 
 function makeRoom(code) {
@@ -112,6 +171,8 @@ function makeRoom(code) {
         },
 
         moveCount: 0,
+
+        singularities: [],
 
         colossusReady: {
             white: false,
@@ -326,21 +387,32 @@ function capture(room, r, c) {
 }
 
 /*
- * 포탑은 2번 공격당해야 죽는다.
- * 1번째 공격을 받으면 공격 불능 상태가 되고,
- * 2번째 공격을 받아야 실제로 제거된다.
+ * 원거리/스플래시 공격(총/포탑/전차/거신병) 판정.
  *
- * 원거리 공격(총/포탑/전차/거신병)에만 적용한다.
- * 일반 이동 처치는 그 칸을 밟고 지나가야 하므로 항상 즉시 제거한다.
+ * 장갑(armored) 속성 기물은 목숨이 2개라 한 번 맞아도 죽지 않는다
+ * (포탑은 기존처럼 turretDisabled로 표시된다).
+ * 냉(cold) 속성 기물은 관통/화 속성 공격이 아니면 아예 피해를 입지 않는다.
+ *
+ * 일반 이동 처치(capture)는 그 칸을 밟고 지나가야 하므로 항상 즉시 제거되며
+ * 이 함수를 거치지 않는다.
  */
-function damageOrKill(room, r, c) {
+function damageOrKill(room, r, c, attackerAttrs) {
     const p = room.board[r][c];
 
     if (!p) return { hit: false };
 
-    if (p.type === "turret" && !p.turretDisabled) {
-        p.turretDisabled = true;
-        p.turretHits = 1;
+    if (!canDamage(attackerAttrs, p.attributes)) {
+        return { hit: false, blocked: true, piece: p };
+    }
+
+    if (p.lives > 1) {
+        p.lives--;
+
+        if (p.type === "turret") {
+            p.turretDisabled = true;
+            p.turretHits = (p.turretHits || 0) + 1;
+        }
+
         return { hit: true, killed: false, piece: p };
     }
 
@@ -348,17 +420,17 @@ function damageOrKill(room, r, c) {
     return { hit: true, killed: true, piece: killed };
 }
 
-function colossusBlast(room, cr, cc) {
+function colossusBlast(room, cr, cc, attackerAttrs) {
     for (let r = cr-2; r <= cr+2; r++) {
         for (let c = cc-2; c <= cc+2; c++) {
             if (r === cr && c === cc) continue;
             if (!inside(r,c)) continue;
-            if (room.board[r][c]) damageOrKill(room, r, c);
+            if (room.board[r][c]) damageOrKill(room, r, c, attackerAttrs);
         }
     }
 }
 
-function tankRampage(room, fr, fc, tr, tc) {
+function tankRampage(room, fr, fc, tr, tc, attackerAttrs) {
     const horizontal = fr === tr;
     const dr = Math.sign(tr - fr);
     const dc = Math.sign(tc - fc);
@@ -376,14 +448,14 @@ function tankRampage(room, fr, fc, tr, tc) {
     }
 
     for (const [pr,pc] of cells) {
-        if (room.board[pr][pc]) damageOrKill(room, pr, pc);
+        if (room.board[pr][pc]) damageOrKill(room, pr, pc, attackerAttrs);
 
         if (horizontal) {
-            if (inside(pr-1,pc) && room.board[pr-1][pc]) damageOrKill(room, pr-1, pc);
-            if (inside(pr+1,pc) && room.board[pr+1][pc]) damageOrKill(room, pr+1, pc);
+            if (inside(pr-1,pc) && room.board[pr-1][pc]) damageOrKill(room, pr-1, pc, attackerAttrs);
+            if (inside(pr+1,pc) && room.board[pr+1][pc]) damageOrKill(room, pr+1, pc, attackerAttrs);
         } else {
-            if (inside(pr,pc-1) && room.board[pr][pc-1]) damageOrKill(room, pr, pc-1);
-            if (inside(pr,pc+1) && room.board[pr][pc+1]) damageOrKill(room, pr, pc+1);
+            if (inside(pr,pc-1) && room.board[pr][pc-1]) damageOrKill(room, pr, pc-1, attackerAttrs);
+            if (inside(pr,pc+1) && room.board[pr][pc+1]) damageOrKill(room, pr, pc+1, attackerAttrs);
         }
     }
 }
@@ -500,6 +572,53 @@ function nextTurn(room) {
     }
 }
 
+/*
+ * 네크로맨서 특이점 처리.
+ *
+ * - 특이점 칸에 기물이 없고 수리가 필요 없는 상태라면, 2수마다 폰을 소환한다.
+ * - 특이점 칸이 적에게 점령당하면 수리 필요 상태로 전환된다.
+ * - 적이 그 칸을 벗어나면(비거나 아군이 점령하면) 수리를 기다리는 상태가 되고,
+ *   소유자가 repairSingularity 액션으로 한 턴을 소모해야 다시 가동된다.
+ */
+function processSingularities(room) {
+    for (const s of room.singularities) {
+        const occupant = room.board[s.r][s.c];
+
+        if (occupant && occupant.color !== s.color) {
+            s.needsRepair = true;
+            s.ticks = 0;
+            continue;
+        }
+
+        if (s.needsRepair) {
+            // 적이 벗어날 때까지는 계속 대기(수리는 별도 액션으로만 가능)
+            continue;
+        }
+
+        if (occupant) {
+            // 아군 기물이 올라와 있으면 소환을 쉰다(카운트는 유지하지 않는다)
+            continue;
+        }
+
+        s.ticks++;
+
+        if (s.ticks >= 2) {
+            s.ticks = 0;
+
+            room.board[s.r][s.c] = createPiece(
+                "pawn",
+                s.color,
+                s.color === "white" ? "♙" : "♟"
+            );
+        }
+    }
+}
+
+function advanceTurn(room) {
+    nextTurn(room);
+    processSingularities(room);
+}
+
 function broadcast(room) {
     const data = JSON.stringify({
         type: "state",
@@ -509,6 +628,7 @@ function broadcast(room) {
         time: room.time,
         score: room.score,
         moveCount: room.moveCount,
+        singularities: room.singularities,
         colossusReady: room.colossusReady,
         colossusSacrificeReady: {
             white: sacrificeColossusEligible(room,"white"),
@@ -575,6 +695,7 @@ function handleAction(room, ws, action) {
         room.time = fresh.time;
         room.score = fresh.score;
         room.moveCount = fresh.moveCount;
+        room.singularities = fresh.singularities;
         room.colossusReady = fresh.colossusReady;
         room.gameEnded = fresh.gameEnded;
 
@@ -639,7 +760,7 @@ function handleAction(room, ws, action) {
             addMove(room, tc > fc ? "O-O" : "O-O-O");
 
             finishIfNeeded(room);
-            nextTurn(room);
+            advanceTurn(room);
             broadcast(room);
 
             return;
@@ -660,14 +781,14 @@ function handleAction(room, ws, action) {
          * 1회성으로 자폭한다.
          */
         if (p.type === "tank") {
-            tankRampage(room, fr, fc, tr, tc);
+            tankRampage(room, fr, fc, tr, tc, p.attributes);
             room.board[fr][fc] = null;
             room.board[tr][tc] = null;
 
             addMove(room, squareName(fr,fc) + "[TANK]" + squareName(tr,tc));
 
             finishIfNeeded(room);
-            nextTurn(room);
+            advanceTurn(room);
             broadcast(room);
 
             return;
@@ -676,20 +797,36 @@ function handleAction(room, ws, action) {
         const target =
             room.board[tr][tc];
 
+        if (target && !canDamage(p.attributes, target.attributes)) {
+            sendError(ws,"냉 속성 기물은 이 공격으로 처치할 수 없습니다.");
+            return;
+        }
+
         let notation =
             squareName(tr,tc);
 
         /*
-         * 규칙 3: 첫 5수 내에 폰이 자신의 룩/퀸을 죽이며
-         * 뒤로 이동했을 때 원하는 기물로 프로모션 가능.
+         * 규칙 4: 백프로모션.
+         *
+         * 폰이 자신의 뒷랭크(백=1랭크=row7 / 흑=8랭크=row0)에 도달하면 발동한다.
+         * - 그 칸에 자신의 표준 기물(퀸/룩/비숍/나이트)이 있었다면, 강제로 그 기물로 변한다.
+         * - 그 칸이 비어 있었다면, 원하는 표준 기물로 자유롭게 변한다.
+         * - 적 기물을 잡으며 도달한 경우엔 일반 처치일 뿐, 프로모션은 없다.
          */
-        const promotionEligible =
-            room.moveCount < 5 &&
-            p.type === "pawn" &&
-            !!target &&
+        const STANDARD_PROMOTION_TYPES = ["queen","rook","bishop","knight"];
+        const backRank = p.color === "white" ? 7 : 0;
+        const atBackRank = p.type === "pawn" && tr === backRank;
+
+        const forcedPromotionType =
+            atBackRank &&
+            target &&
             target.color === p.color &&
-            (target.type === "rook" || target.type === "queen") &&
-            ((p.color === "white" && tr > fr) || (p.color === "black" && tr < fr));
+            STANDARD_PROMOTION_TYPES.includes(target.type)
+                ? target.type
+                : null;
+
+        const freePromotionEligible =
+            atBackRank && !target;
 
         if (target) {
             notation =
@@ -720,25 +857,30 @@ function handleAction(room, ws, action) {
             addMove(room,notation);
 
             finishIfNeeded(room);
-            nextTurn(room);
+            advanceTurn(room);
             broadcast(room);
 
             return;
         }
 
-        if (
-            promotionEligible &&
-            action.promotion &&
-            ["queen","rook","bishop","knight"].includes(action.promotion)
-        ) {
-            const symbols = {
-                queen: p.color === "white" ? "♕" : "♛",
-                rook: p.color === "white" ? "♖" : "♜",
-                bishop: p.color === "white" ? "♗" : "♝",
-                knight: p.color === "white" ? "♘" : "♞"
-            };
+        const promotionSymbols = {
+            queen: p.color === "white" ? "♕" : "♛",
+            rook: p.color === "white" ? "♖" : "♜",
+            bishop: p.color === "white" ? "♗" : "♝",
+            knight: p.color === "white" ? "♘" : "♞"
+        };
 
-            room.board[tr][tc] = createPiece(action.promotion, p.color, symbols[action.promotion]);
+        if (forcedPromotionType) {
+            room.board[tr][tc] = createPiece(forcedPromotionType, p.color, promotionSymbols[forcedPromotionType]);
+            room.board[fr][fc] = null;
+
+            notation += "=" + forcedPromotionType[0].toUpperCase();
+        } else if (
+            freePromotionEligible &&
+            action.promotion &&
+            STANDARD_PROMOTION_TYPES.includes(action.promotion)
+        ) {
+            room.board[tr][tc] = createPiece(action.promotion, p.color, promotionSymbols[action.promotion]);
             room.board[fr][fc] = null;
 
             notation += "=" + action.promotion[0].toUpperCase();
@@ -752,13 +894,13 @@ function handleAction(room, ws, action) {
          * 거신병: 이동 시 목적지 중심 5x5 칸의 모든 기물을 죽인다.
          */
         if (p.type === "colossus") {
-            colossusBlast(room, tr, tc);
+            colossusBlast(room, tr, tc, p.attributes);
         }
 
         addMove(room,notation);
 
         finishIfNeeded(room);
-        nextTurn(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
@@ -792,7 +934,7 @@ function handleAction(room, ws, action) {
             ) + "[G]"
         );
 
-        nextTurn(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
@@ -840,7 +982,8 @@ function handleAction(room, ws, action) {
         damageOrKill(
             room,
             action.tr,
-            action.tc
+            action.tc,
+            p.attributes
         );
 
         addMove(
@@ -857,7 +1000,7 @@ function handleAction(room, ws, action) {
         );
 
         finishIfNeeded(room);
-        nextTurn(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
@@ -917,7 +1060,7 @@ function handleAction(room, ws, action) {
             if (!victim) continue;
             if (victim.type === "king") continue; // 포탑은 킹을 직접(스플래시 포함) 죽일 수 없다
 
-            damageOrKill(room, hr, hc);
+            damageOrKill(room, hr, hc, turret.attributes);
         }
 
         addMove(
@@ -934,16 +1077,21 @@ function handleAction(room, ws, action) {
         );
 
         finishIfNeeded(room);
-        nextTurn(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
     }
 
     /*
-     * 합체
+     * 연성(forge).
+     *
+     * 합성 가능한 두 기물이 서로 3*3칸 이내(체비셰프 거리 <= 2)에
+     * 있어야 연성대를 사용할 수 있다.
+     * 결과 기물은 두 기물이 이루는 3*3 영역의 가운데 칸에서 소환된다
+     * (두 좌표의 중간지점을 반올림). 단, 포탑은 룩이 있던 자리에서 소환된다.
      */
-    if (action.type === "combine") {
+    if (action.type === "forge") {
 
         const a =
             room.board[action.fr]?.[action.fc];
@@ -957,7 +1105,7 @@ function handleAction(room, ws, action) {
             a.color !== playerColor ||
             b.color !== playerColor
         ) {
-            sendError(ws,"합체할 수 없습니다.");
+            sendError(ws,"연성할 수 없습니다.");
             return;
         }
 
@@ -965,7 +1113,17 @@ function handleAction(room, ws, action) {
             a.gun ||
             b.gun
         ) {
-            sendError(ws,"총이 장착된 폰은 합체할 수 없습니다.");
+            sendError(ws,"총이 장착된 폰은 연성할 수 없습니다.");
+            return;
+        }
+
+        const chebyshev = Math.max(
+            Math.abs(action.fr - action.tr),
+            Math.abs(action.fc - action.tc)
+        );
+
+        if (chebyshev > 2) {
+            sendError(ws,"연성대의 3*3 범위 밖에 있습니다.");
             return;
         }
 
@@ -1019,18 +1177,18 @@ function handleAction(room, ws, action) {
         }
 
         if (!result) {
-            sendError(ws,"이 두 기물은 합체할 수 없습니다.");
+            sendError(ws,"이 두 기물은 연성할 수 없습니다.");
             return;
         }
 
         /*
-         * 포탑: 폰이 룩의 자리로 이동하며 합쳐진다.
-         * 기마병: 나이트가 폰의 자리로 이동하며 합쳐진다.
-         * 그 외: 목표로 지정한 칸(action.tr, action.tc)으로 합쳐진다.
+         * 포탑: 룩이 있던 자리에서 소환된다.
+         * 기마병: 나이트가 있던 자리에서 소환된다(기존 규칙 유지).
+         * 그 외: 3*3 영역의 가운데(두 좌표 중간지점, 반올림)에서 소환된다.
          */
 
-        let finalR = action.tr;
-        let finalC = action.tc;
+        let finalR = Math.round((action.fr + action.tr) / 2);
+        let finalC = Math.round((action.fc + action.tc) / 2);
 
         const fromR = action.fr;
         const fromC = action.fc;
@@ -1051,6 +1209,17 @@ function handleAction(room, ws, action) {
 
             finalR = pawnAt.r;
             finalC = pawnAt.c;
+        }
+
+        const occupant = room.board[finalR][finalC];
+
+        if (
+            occupant &&
+            !(finalR === action.fr && finalC === action.fc) &&
+            !(finalR === action.tr && finalC === action.tc)
+        ) {
+            sendError(ws,"연성 위치에 다른 기물이 있습니다.");
+            return;
         }
 
         room.board[action.fr][action.fc] = null;
@@ -1094,7 +1263,108 @@ function handleAction(room, ws, action) {
             )
         );
 
-        nextTurn(room);
+        advanceTurn(room);
+        broadcast(room);
+
+        return;
+    }
+
+
+    /*
+     * 네크로맨서 특이점 생성.
+     *
+     * 자신의 네크로맨서 주위 3*3칸(체비셰프 거리 <= 1)의 빈 칸에
+     * 특이점을 만들 수 있다. 한 턴을 소모한다.
+     */
+    if (action.type === "createSingularity") {
+
+        const { r, c } = action;
+
+        if (!inside(r,c)) {
+            sendError(ws,"칸 위치가 잘못되었습니다.");
+            return;
+        }
+
+        const necro = room.board[action.necroR]?.[action.necroC];
+
+        if (
+            !necro ||
+            necro.color !== playerColor ||
+            necro.type !== "necromancer"
+        ) {
+            sendError(ws,"네크로맨서가 아닙니다.");
+            return;
+        }
+
+        const dist = Math.max(
+            Math.abs(action.necroR - r),
+            Math.abs(action.necroC - c)
+        );
+
+        if (dist > 1) {
+            sendError(ws,"네크로맨서 주위 3*3 범위를 벗어났습니다.");
+            return;
+        }
+
+        if (room.board[r][c]) {
+            sendError(ws,"빈 칸이 아닙니다.");
+            return;
+        }
+
+        if (room.singularities.some(s => s.r === r && s.c === c)) {
+            sendError(ws,"이미 특이점이 있습니다.");
+            return;
+        }
+
+        room.singularities.push({
+            r, c,
+            color: playerColor,
+            ticks: 0,
+            needsRepair: false
+        });
+
+        addMove(room, "[SINGULARITY]" + squareName(r,c));
+
+        finishIfNeeded(room);
+        advanceTurn(room);
+        broadcast(room);
+
+        return;
+    }
+
+    /*
+     * 특이점 수리.
+     *
+     * 적에게 점령당했다가 적이 벗어난 특이점을 다시 가동시킨다.
+     * 한 턴을 소모한다.
+     */
+    if (action.type === "repairSingularity") {
+
+        const { r, c } = action;
+
+        const singularity = room.singularities.find(
+            s => s.r === r && s.c === c && s.color === playerColor
+        );
+
+        if (!singularity || !singularity.needsRepair) {
+            sendError(ws,"수리할 특이점이 없습니다.");
+            return;
+        }
+
+        const occupant = room.board[r][c];
+
+        if (occupant && occupant.color !== playerColor) {
+            sendError(ws,"적 기물이 아직 특이점을 점령하고 있습니다.");
+            return;
+        }
+
+        singularity.needsRepair = false;
+        singularity.ticks = 0;
+
+        addMove(room, "[REPAIR]" + squareName(r,c));
+
+        finishIfNeeded(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
@@ -1180,7 +1450,7 @@ function handleAction(room, ws, action) {
         room.extraTurns[opponent]++;
 
         finishIfNeeded(room);
-        nextTurn(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
@@ -1231,7 +1501,7 @@ function handleAction(room, ws, action) {
         );
 
         finishIfNeeded(room);
-        nextTurn(room);
+        advanceTurn(room);
         broadcast(room);
 
         return;
