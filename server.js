@@ -17,6 +17,7 @@ function createPiece(type, color, symbol) {
         maxAmmo: type === "turret" ? 8 : 0,
         turretHits: 0,
         turretDisabled: false,
+        hasMoved: false,
         deathRow: null,
         deathCol: null
     };
@@ -121,18 +122,34 @@ function makeRoom(code) {
     };
 }
 
+/*
+ * 기물 점수표.
+ *
+ * 폰 1 / 나이트,비숍 3 / 룩 5 / 퀸 9 / 킹 2
+ * 야생마 4 / 네크로맨서 4 / 기마병 6 / 총든 폰 3
+ *
+ * 포탑/전차/거신병은 별도 규칙에 없어 임의로 배정.
+ */
 const PIECE_VALUE = {
     pawn: 1,
     knight: 3,
     bishop: 3,
-    cavalry: 3,
-    wildHorse: 4,
     rook: 5,
-    turret: 5,
-    necromancer: 6,
     queen: 9,
-    king: 0
+    king: 2,
+    wildHorse: 4,
+    necromancer: 4,
+    cavalry: 6,
+    turret: 5,
+    tank: 8,
+    colossus: 0
 };
+
+function pieceValue(p) {
+    if (!p) return 0;
+    if (p.type === "pawn" && p.gun) return 3;
+    return PIECE_VALUE[p.type] || 0;
+}
 
 function inside(r,c) {
     return r >= 0 && r < 8 && c >= 0 && c < 8;
@@ -154,23 +171,27 @@ function clearPath(board, fr, fc, tr, tc) {
     return true;
 }
 
+/*
+ * 이동 가능 여부.
+ *
+ * 규칙 1: 자신의 기물이 있는 칸으로도 이동(=처치)할 수 있어야 하므로
+ * 같은 색 기물이라는 이유만으로 막지 않는다.
+ */
 function canMove(room, fr, fc, tr, tc) {
     if (!inside(tr,tc)) return false;
+    if (fr === tr && fc === tc) return false;
 
     const p = room.board[fr][fc];
-    const target = room.board[tr][tc];
 
     if (!p) return false;
 
-    if (target && target.color === p.color) return false;
-
-    if (p.type === "pawn" && p.gun) return false;
     if (p.type === "turret") return false;
+    if (p.type === "pawn" && p.gun) return false;
 
     const dr = Math.abs(tr-fr);
     const dc = Math.abs(tc-fc);
 
-    if (p.type === "pawn" || p.type === "king") {
+    if (p.type === "pawn" || p.type === "king" || p.type === "colossus") {
         return dr <= 1 &&
                dc <= 1 &&
                !(dr === 0 && dc === 0);
@@ -214,6 +235,7 @@ function canMove(room, fr, fc, tr, tc) {
             (fr === tr || fc === tc) &&
             !(dr === 0 && dc === 0)
         );
+        // 룩의 이동범위 + 기물을 뛰어넘을 수 있음 (clearPath 체크 없음)
     }
 
     if (p.type === "necromancer") {
@@ -226,7 +248,51 @@ function canMove(room, fr, fc, tr, tc) {
                !(dr === 0 && dc === 0);
     }
 
+    if (p.type === "tank") {
+        if (fr !== tr && fc !== tc) return false;
+        return true; // 지나가는 길의 기물을 밀어버리므로 clearPath 불필요
+    }
+
     return false;
+}
+
+/*
+ * 캐슬링.
+ */
+function castleInfo(fr, fc, tc) {
+    if (tc > fc) {
+        return {
+            rookFrom: { r: fr, c: 7 },
+            rookTo: { r: fr, c: 5 },
+            pathCols: [fc+1, fc+2]
+        };
+    }
+
+    return {
+        rookFrom: { r: fr, c: 0 },
+        rookTo: { r: fr, c: 3 },
+        pathCols: [fc-1, fc-2, fc-3]
+    };
+}
+
+function canCastle(room, playerColor, fr, fc, tr, tc) {
+    const king = room.board[fr][fc];
+
+    if (!king || king.type !== "king" || king.color !== playerColor) return null;
+    if (king.hasMoved) return null;
+    if (fr !== tr) return null;
+    if (Math.abs(tc - fc) !== 2) return null;
+
+    const info = castleInfo(fr, fc, tc);
+    const rook = room.board[info.rookFrom.r]?.[info.rookFrom.c];
+
+    if (!rook || rook.type !== "rook" || rook.color !== playerColor || rook.hasMoved) return null;
+
+    for (const c of info.pathCols) {
+        if (room.board[fr][c]) return null;
+    }
+
+    return info;
 }
 
 function squareName(r,c) {
@@ -249,7 +315,7 @@ function capture(room, r, c) {
     room.board[r][c] = null;
 
     const capturingColor = p.color === "white" ? "black" : "white";
-    room.score[capturingColor] += PIECE_VALUE[p.type] || 0;
+    room.score[capturingColor] += pieceValue(p);
 
     if (p.type === "king") {
         room.frozenTurns[p.color] = 2;
@@ -257,6 +323,114 @@ function capture(room, r, c) {
     }
 
     return p;
+}
+
+/*
+ * 포탑은 2번 공격당해야 죽는다.
+ * 1번째 공격을 받으면 공격 불능 상태가 되고,
+ * 2번째 공격을 받아야 실제로 제거된다.
+ *
+ * 원거리 공격(총/포탑/전차/거신병)에만 적용한다.
+ * 일반 이동 처치는 그 칸을 밟고 지나가야 하므로 항상 즉시 제거한다.
+ */
+function damageOrKill(room, r, c) {
+    const p = room.board[r][c];
+
+    if (!p) return { hit: false };
+
+    if (p.type === "turret" && !p.turretDisabled) {
+        p.turretDisabled = true;
+        p.turretHits = 1;
+        return { hit: true, killed: false, piece: p };
+    }
+
+    const killed = capture(room, r, c);
+    return { hit: true, killed: true, piece: killed };
+}
+
+function colossusBlast(room, cr, cc) {
+    for (let r = cr-2; r <= cr+2; r++) {
+        for (let c = cc-2; c <= cc+2; c++) {
+            if (r === cr && c === cc) continue;
+            if (!inside(r,c)) continue;
+            if (room.board[r][c]) damageOrKill(room, r, c);
+        }
+    }
+}
+
+function tankRampage(room, fr, fc, tr, tc) {
+    const horizontal = fr === tr;
+    const dr = Math.sign(tr - fr);
+    const dc = Math.sign(tc - fc);
+
+    let r = fr + dr;
+    let c = fc + dc;
+
+    const cells = [];
+
+    while (true) {
+        cells.push([r,c]);
+        if (r === tr && c === tc) break;
+        r += dr;
+        c += dc;
+    }
+
+    for (const [pr,pc] of cells) {
+        if (room.board[pr][pc]) damageOrKill(room, pr, pc);
+
+        if (horizontal) {
+            if (inside(pr-1,pc) && room.board[pr-1][pc]) damageOrKill(room, pr-1, pc);
+            if (inside(pr+1,pc) && room.board[pr+1][pc]) damageOrKill(room, pr+1, pc);
+        } else {
+            if (inside(pr,pc-1) && room.board[pr][pc-1]) damageOrKill(room, pr, pc-1);
+            if (inside(pr,pc+1) && room.board[pr][pc+1]) damageOrKill(room, pr, pc+1);
+        }
+    }
+}
+
+function countPiece(room, color, type) {
+    let n = 0;
+
+    for (const row of room.board) {
+        for (const p of row) {
+            if (p && p.color === color && p.type === type) n++;
+        }
+    }
+
+    return n;
+}
+
+/*
+ * 30수 이후 특정 기물 조합을 희생하여 거신병 소환.
+ * 폰4 / 나이트2 / 비숍2 / 퀸1 / 킹1 / 룩1
+ */
+function sacrificeColossusEligible(room, color) {
+    return room.moveCount >= 30 &&
+        countPiece(room,color,"pawn") >= 4 &&
+        countPiece(room,color,"knight") >= 2 &&
+        countPiece(room,color,"bishop") >= 2 &&
+        countPiece(room,color,"queen") >= 1 &&
+        countPiece(room,color,"king") >= 1 &&
+        countPiece(room,color,"rook") >= 1;
+}
+
+function performSacrifice(room, color) {
+    const need = { pawn:4, knight:2, bishop:2, queen:1, king:1, rook:1 };
+
+    for (const type of Object.keys(need)) {
+        let remaining = need[type];
+
+        for (let r = 0; r < 8 && remaining > 0; r++) {
+            for (let c = 0; c < 8 && remaining > 0; c++) {
+                const p = room.board[r][c];
+
+                if (p && p.color === color && p.type === type) {
+                    room.board[r][c] = null;
+                    remaining--;
+                }
+            }
+        }
+    }
 }
 
 function finishIfNeeded(room) {
@@ -336,6 +510,10 @@ function broadcast(room) {
         score: room.score,
         moveCount: room.moveCount,
         colossusReady: room.colossusReady,
+        colossusSacrificeReady: {
+            white: sacrificeColossusEligible(room,"white"),
+            black: sacrificeColossusEligible(room,"black")
+        },
         gameEnded: room.gameEnded,
         players: {
             white: !!room.players.white,
@@ -437,6 +615,36 @@ function handleAction(room, ws, action) {
             return;
         }
 
+        /*
+         * 캐슬링 시도.
+         */
+        if (p.type === "king" && fr === tr && Math.abs(tc - fc) === 2) {
+
+            const info = canCastle(room, playerColor, fr, fc, tr, tc);
+
+            if (!info) {
+                sendError(ws,"캐슬링이 불가능합니다.");
+                return;
+            }
+
+            room.board[tr][tc] = p;
+            room.board[fr][fc] = null;
+            p.hasMoved = true;
+
+            const rook = room.board[info.rookFrom.r][info.rookFrom.c];
+            room.board[info.rookTo.r][info.rookTo.c] = rook;
+            room.board[info.rookFrom.r][info.rookFrom.c] = null;
+            if (rook) rook.hasMoved = true;
+
+            addMove(room, tc > fc ? "O-O" : "O-O-O");
+
+            finishIfNeeded(room);
+            nextTurn(room);
+            broadcast(room);
+
+            return;
+        }
+
         if (
             !canMove(
                 room,
@@ -447,11 +655,41 @@ function handleAction(room, ws, action) {
             return;
         }
 
+        /*
+         * 전차: 지나간 경로와 그 옆칸의 모든 기물을 죽이고
+         * 1회성으로 자폭한다.
+         */
+        if (p.type === "tank") {
+            tankRampage(room, fr, fc, tr, tc);
+            room.board[fr][fc] = null;
+            room.board[tr][tc] = null;
+
+            addMove(room, squareName(fr,fc) + "[TANK]" + squareName(tr,tc));
+
+            finishIfNeeded(room);
+            nextTurn(room);
+            broadcast(room);
+
+            return;
+        }
+
         const target =
             room.board[tr][tc];
 
         let notation =
             squareName(tr,tc);
+
+        /*
+         * 규칙 3: 첫 5수 내에 폰이 자신의 룩/퀸을 죽이며
+         * 뒤로 이동했을 때 원하는 기물로 프로모션 가능.
+         */
+        const promotionEligible =
+            room.moveCount < 5 &&
+            p.type === "pawn" &&
+            !!target &&
+            target.color === p.color &&
+            (target.type === "rook" || target.type === "queen") &&
+            ((p.color === "white" && tr > fr) || (p.color === "black" && tr < fr));
 
         if (target) {
             notation =
@@ -466,14 +704,14 @@ function handleAction(room, ws, action) {
         }
 
         /*
-         * 야생마가 잡으면
-         * 상대 기물과 함께 죽는다.
+         * 야생마는 잡거나(공격자) 잡혔을 때(피격자) 모두
+         * 자신도 함께 죽는다.
          */
         if (target &&
-            p.type === "wildHorse") {
+            (p.type === "wildHorse" || target.type === "wildHorse")) {
 
-            p.deathRow = tr;
-            p.deathCol = tc;
+            p.deathRow = fr;
+            p.deathCol = fc;
 
             room.deadPieces[p.color].push(p);
 
@@ -488,8 +726,34 @@ function handleAction(room, ws, action) {
             return;
         }
 
-        room.board[tr][tc] = p;
-        room.board[fr][fc] = null;
+        if (
+            promotionEligible &&
+            action.promotion &&
+            ["queen","rook","bishop","knight"].includes(action.promotion)
+        ) {
+            const symbols = {
+                queen: p.color === "white" ? "♕" : "♛",
+                rook: p.color === "white" ? "♖" : "♜",
+                bishop: p.color === "white" ? "♗" : "♝",
+                knight: p.color === "white" ? "♘" : "♞"
+            };
+
+            room.board[tr][tc] = createPiece(action.promotion, p.color, symbols[action.promotion]);
+            room.board[fr][fc] = null;
+
+            notation += "=" + action.promotion[0].toUpperCase();
+        } else {
+            p.hasMoved = true;
+            room.board[tr][tc] = p;
+            room.board[fr][fc] = null;
+        }
+
+        /*
+         * 거신병: 이동 시 목적지 중심 5x5 칸의 모든 기물을 죽인다.
+         */
+        if (p.type === "colossus") {
+            colossusBlast(room, tr, tc);
+        }
 
         addMove(room,notation);
 
@@ -535,7 +799,7 @@ function handleAction(room, ws, action) {
     }
 
     /*
-     * 총 공격
+     * 총 공격 (5x5 범위, 자신의 기물도 공격 가능)
      */
     if (action.type === "gunAttack") {
 
@@ -549,8 +813,7 @@ function handleAction(room, ws, action) {
             !p ||
             p.color !== playerColor ||
             !p.gun ||
-            !target ||
-            target.color === playerColor
+            !target
         ) {
             sendError(ws,"총 공격이 불가능합니다.");
             return;
@@ -567,14 +830,14 @@ function handleAction(room, ws, action) {
             );
 
         if (
-            dr > 3 ||
-            dc > 3
+            dr > 2 ||
+            dc > 2
         ) {
-            sendError(ws,"총의 7x7 범위를 벗어났습니다.");
+            sendError(ws,"총의 5x5 범위를 벗어났습니다.");
             return;
         }
 
-        capture(
+        damageOrKill(
             room,
             action.tr,
             action.tc
@@ -601,25 +864,34 @@ function handleAction(room, ws, action) {
     }
 
     /*
-     * 포탑 공격
+     * 포탑 공격.
+     *
+     * 목표 칸 + 앞/뒤/좌/우 최대 4칸까지 함께 파괴한다 (킹 제외).
+     * 자신의 기물도 목표로 삼을 수 있다.
+     * 포탑은 2회 공격당해야 파괴된다.
      */
     if (action.type === "turretAttack") {
 
         const turret =
             room.board[action.fr]?.[action.fc];
 
-        const target =
-            room.board[action.tr]?.[action.tc];
-
         if (
             !turret ||
             turret.color !== playerColor ||
             turret.type !== "turret" ||
             turret.turretDisabled ||
-            turret.ammo <= 0 ||
-            !target ||
-            target.color === playerColor ||
-            target.type === "king"
+            turret.ammo <= 0
+        ) {
+            sendError(ws,"포탑 공격이 불가능합니다.");
+            return;
+        }
+
+        const primary =
+            room.board[action.tr]?.[action.tc];
+
+        if (
+            !primary ||
+            primary.type === "king"
         ) {
             sendError(ws,"포탑 공격이 불가능합니다.");
             return;
@@ -627,15 +899,26 @@ function handleAction(room, ws, action) {
 
         turret.ammo--;
 
-        /*
-         * 포탑은 공격할 때마다
-         * 탄약 하나를 소비.
-         */
-        capture(
-            room,
-            action.tr,
-            action.tc
-        );
+        const hits = [[action.tr,action.tc]];
+        const deltas = [[-1,0],[1,0],[0,-1],[0,1]];
+
+        for (const [dr,dc] of deltas) {
+            const nr = action.tr + dr;
+            const nc = action.tc + dc;
+
+            if (inside(nr,nc) && room.board[nr][nc]) {
+                hits.push([nr,nc]);
+            }
+        }
+
+        for (const [hr,hc] of hits) {
+            const victim = room.board[hr][hc];
+
+            if (!victim) continue;
+            if (victim.type === "king") continue; // 포탑은 킹을 직접(스플래시 포함) 죽일 수 없다
+
+            damageOrKill(room, hr, hc);
+        }
 
         addMove(
             room,
@@ -678,6 +961,14 @@ function handleAction(room, ws, action) {
             return;
         }
 
+        if (
+            a.gun ||
+            b.gun
+        ) {
+            sendError(ws,"총이 장착된 폰은 합체할 수 없습니다.");
+            return;
+        }
+
         let result = null;
 
         if (
@@ -692,6 +983,13 @@ function handleAction(room, ws, action) {
             b.type === "bishop"
         ) {
             result = "necromancer";
+        }
+
+        else if (
+            a.type === "rook" &&
+            b.type === "rook"
+        ) {
+            result = "tank";
         }
 
         else if (
@@ -725,90 +1023,60 @@ function handleAction(room, ws, action) {
             return;
         }
 
-        if (
-            a.gun ||
-            b.gun
-        ) {
-            sendError(ws,"총이 장착된 폰은 합체할 수 없습니다.");
-            return;
-        }
-
         /*
-         * 폰 + 룩:
-         * 폰이 룩 자리로 이동.
-         *
-         * 폰 + 나이트:
-         * 폰이 나이트 자리로 이동.
-         *
-         * 나이트 + 나이트,
-         * 비숍 + 비숍:
-         * 첫 번째 기물이 두 번째 자리로 이동.
+         * 포탑: 폰이 룩의 자리로 이동하며 합쳐진다.
+         * 기마병: 나이트가 폰의 자리로 이동하며 합쳐진다.
+         * 그 외: 목표로 지정한 칸(action.tr, action.tc)으로 합쳐진다.
          */
 
         let finalR = action.tr;
         let finalC = action.tc;
 
-        let fromR = action.fr;
-        let fromC = action.fc;
+        const fromR = action.fr;
+        const fromC = action.fc;
 
-        if (
-            result === "turret" ||
-            result === "cavalry"
-        ) {
-            if (a.type === "pawn") {
-                finalR = action.tr;
-                finalC = action.tc;
-            } else {
-                finalR = action.fr;
-                finalC = action.fc;
-            }
+        if (result === "turret") {
+            const rookAt = a.type === "rook"
+                ? { r: action.fr, c: action.fc }
+                : { r: action.tr, c: action.tc };
+
+            finalR = rookAt.r;
+            finalC = rookAt.c;
+        }
+
+        else if (result === "cavalry") {
+            const pawnAt = a.type === "pawn"
+                ? { r: action.fr, c: action.fc }
+                : { r: action.tr, c: action.tc };
+
+            finalR = pawnAt.r;
+            finalC = pawnAt.c;
         }
 
         room.board[action.fr][action.fc] = null;
         room.board[action.tr][action.tc] = null;
 
-        let symbol = "";
-
-        if (result === "wildHorse") {
-            symbol =
-                playerColor === "white"
-                    ? "♘"
-                    : "♞";
-        }
-
-        if (result === "necromancer") {
-            symbol =
-                playerColor === "white"
-                    ? "♗"
-                    : "♝";
-        }
-
-        if (result === "turret") {
-            symbol =
-                playerColor === "white"
-                    ? "♖"
-                    : "♜";
-        }
-
-        if (result === "cavalry") {
-            symbol =
-                playerColor === "white"
-                    ? "♘"
-                    : "♞";
-        }
+        const symbols = {
+            wildHorse: playerColor === "white" ? "♘" : "♞",
+            necromancer: playerColor === "white" ? "♗" : "♝",
+            turret: playerColor === "white" ? "♖" : "♜",
+            cavalry: playerColor === "white" ? "♘" : "♞",
+            tank: playerColor === "white" ? "▣" : "▣"
+        };
 
         room.board[finalR][finalC] =
             createPiece(
                 result,
                 playerColor,
-                symbol
+                symbols[result]
             );
 
         const codes = {
             wildHorse: "W",
             necromancer: "N",
             turret: "T",
-            cavalry: "C"
+            cavalry: "C",
+            tank: "TK"
         };
 
         addMove(
@@ -866,11 +1134,11 @@ function handleAction(room, ws, action) {
             return;
         }
 
-        if (
-            room.board[action.tr][action.tc]
-        ) {
-            sendError(ws,"죽었던 자리가 차 있습니다.");
-            return;
+        /*
+         * 부활할 자리에 기물이 있으면 그 기물을 죽이며 부활한다.
+         */
+        if (room.board[action.tr][action.tc]) {
+            capture(room, action.tr, action.tc);
         }
 
         const revived =
@@ -911,6 +1179,7 @@ function handleAction(room, ws, action) {
 
         room.extraTurns[opponent]++;
 
+        finishIfNeeded(room);
         nextTurn(room);
         broadcast(room);
 
@@ -918,15 +1187,12 @@ function handleAction(room, ws, action) {
     }
 
     /*
-     * 거신병 소환
-     * (상대 킹을 잡았을 때 한 번 사용 가능)
+     * 거신병 소환.
+     *
+     * 경로 1: 상대 킹을 잡아 획득한 무료 소환권 사용.
+     * 경로 2: 30수 이후, 폰4/나이트2/비숍2/퀸1/킹1/룩1을 희생.
      */
     if (action.type === "summonColossus") {
-
-        if (!room.colossusReady[playerColor]) {
-            sendError(ws,"거신병을 소환할 수 없습니다.");
-            return;
-        }
 
         const { r, c } = action;
 
@@ -940,19 +1206,31 @@ function handleAction(room, ws, action) {
             return;
         }
 
+        if (room.colossusReady[playerColor]) {
+            room.colossusReady[playerColor] = false;
+        }
+
+        else if (sacrificeColossusEligible(room, playerColor)) {
+            performSacrifice(room, playerColor);
+        }
+
+        else {
+            sendError(ws,"거신병을 소환할 수 없습니다.");
+            return;
+        }
+
         room.board[r][c] = createPiece(
             "colossus",
             playerColor,
             playerColor === "white" ? "♔" : "♚"
         );
 
-        room.colossusReady[playerColor] = false;
-
         addMove(
             room,
             "[COLOSSUS]" + squareName(r,c)
         );
 
+        finishIfNeeded(room);
         nextTurn(room);
         broadcast(room);
 
