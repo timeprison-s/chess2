@@ -600,3 +600,7 @@ body {
     max-height: 500px;
     overflow-y: auto;
 }
+
+
+/* custom rules */
+.game-info .help{padding:10px;background:#181818;border-radius:6px;line-height:1.7;color:#aaa}.player{gap:8px}.player b{margin-left:auto}.hidden{display:none!important}#colossusButton{padding:10px;border:0;border-radius:6px;background:#8b3dff;color:#fff;font-weight:bold;cursor:pointer}#moveCounter{padding:8px;color:#aaa;text-align:center}.tank{font-weight:900}
