@@ -112,19 +112,30 @@ function combinable(a,b){
   if(!a||!b||a.color!==b.color||a.gun||b.gun)return false;
   return(a.type==="knight"&&b.type==="knight")||(a.type==="bishop"&&b.type==="bishop")||(a.type==="rook"&&b.type==="rook")||((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"));
 }
-function combineResultInfo(a,b){
-  if(a.type==="knight"&&b.type==="knight")return{result:"wildHorse",label:"야생마"};
-  if(a.type==="bishop"&&b.type==="bishop")return{result:"necromancer",label:"네크로맨서"};
-  if(a.type==="rook"&&b.type==="rook")return{result:"tank",label:"전차"};
-  if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))return{result:"turret",label:"포탑"};
-  if((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))return{result:"cavalry",label:"기마병"};
-  return null;
-}
 const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",queen:"퀸",king:"킹"};
 
 /*
+ * 기물 표시 글자(유니코드). 실제 보드 기물(symbol 보유)과
+ * 연성대 미리보기용 가상 기물(symbol 없음) 모두에 사용한다.
+ */
+function pieceGlyph(p){
+  if(!p)return "";
+  if(p.type==="pawn"&&p.gun)return p.color==="white"?"♙":"♟";
+  if(p.type==="wildHorse")return p.color==="white"?"♘":"♞";
+  if(p.type==="necromancer")return p.color==="white"?"♗":"♝";
+  if(p.type==="cavalry")return p.color==="white"?"♘":"♞";
+  if(p.type==="tank")return "▣";
+  if(p.type==="colossus")return p.color==="white"?"♔":"♚";
+  if(p.type==="turret")return p.color==="white"?"♖":"♜";
+  if(p.symbol)return p.symbol;
+  const std={pawn:{white:"♙",black:"♟"},knight:{white:"♘",black:"♞"},bishop:{white:"♗",black:"♝"},rook:{white:"♖",black:"♜"},queen:{white:"♕",black:"♛"},king:{white:"♔",black:"♚"}};
+  return std[p.type]?.[p.color]||"?";
+}
+
+/*
  * 연성대: 서로 3*3칸(체비셰프 거리 <= 2) 이내에 있는 아군 조합을 모두 찾는다.
- * 최종 소환 위치는 서버 로직(포탑=룩 자리, 기마병=폰 자리, 그 외=중간지점 반올림)과 동일하게 계산한다.
+ * 최종 소환 위치는 서버 로직(포탑=룩 자리, 기마병=폰 자리, 그 외=중간지점 반올림)과 동일하게 계산하고,
+ * 그 위치를 중심으로 한 3*3 미리보기 그리드(마인크래프트 제작대 느낌)도 함께 만든다.
  */
 function getForgeCandidates(){
   const pieces=[];
@@ -147,7 +158,25 @@ function getForgeCandidates(){
       }
       const occupant=boardState[finalR]?.[finalC];
       if(occupant&&!(finalR===A.r&&finalC===A.c)&&!(finalR===B.r&&finalC===B.c))continue;
-      out.push({fr:A.r,fc:A.c,tr:B.r,tc:B.c,label:info.label,finalR,finalC,aLabel:PIECE_LABEL[A.p.type]||A.p.type,bLabel:PIECE_LABEL[B.p.type]||B.p.type});
+
+      const gridCells=[];
+      for(let gr=-1;gr<=1;gr++)for(let gc=-1;gc<=1;gc++){
+        const rr=finalR+gr,cc=finalC+gc;
+        let piece=null;
+        if(rr===A.r&&cc===A.c)piece=A.p;
+        else if(rr===B.r&&cc===B.c)piece=B.p;
+        gridCells.push({inside:inside(rr,cc),piece});
+      }
+
+      out.push({
+        fr:A.r,fc:A.c,tr:B.r,tc:B.c,
+        label:info.label,result:info.result,
+        finalR,finalC,
+        aLabel:PIECE_LABEL[A.p.type]||A.p.type,
+        bLabel:PIECE_LABEL[B.p.type]||B.p.type,
+        gridCells,
+        outputGlyph:pieceGlyph({type:info.result,color:myColor})
+      });
     }
   }
   return out;
@@ -159,14 +188,48 @@ function openForgeModal(){
   const box=document.getElementById("forgeOptions");
   box.innerHTML="";
   for(const cand of candidates){
-    const btn=document.createElement("button");
-    btn.className="forge-option";
-    btn.textContent=`${cand.aLabel}(${squareName(cand.fr,cand.fc)}) + ${cand.bLabel}(${squareName(cand.tr,cand.tc)}) → ${cand.label} @ ${squareName(cand.finalR,cand.finalC)}`;
-    btn.onclick=()=>{
+    const card=document.createElement("div");
+    card.className="craft-card";
+
+    const grid=document.createElement("div");
+    grid.className="craft-grid";
+    for(const cell of cand.gridCells){
+      const cellEl=document.createElement("div");
+      cellEl.className="craft-cell"+(cell.inside?"":" craft-cell-outside");
+      if(cell.piece){
+        const glyph=document.createElement("span");
+        glyph.className=cell.piece.color==="white"?"white-piece":"black-piece";
+        glyph.textContent=pieceGlyph(cell.piece);
+        cellEl.appendChild(glyph);
+      }
+      grid.appendChild(cellEl);
+    }
+
+    const arrow=document.createElement("div");
+    arrow.className="craft-arrow";
+    arrow.textContent="→";
+
+    const outputEl=document.createElement("div");
+    outputEl.className="craft-output";
+    const outGlyph=document.createElement("span");
+    outGlyph.className=myColor==="white"?"white-piece":"black-piece";
+    outGlyph.textContent=cand.outputGlyph;
+    outputEl.appendChild(outGlyph);
+
+    const info=document.createElement("div");
+    info.className="craft-info";
+    info.textContent=`${cand.aLabel}(${squareName(cand.fr,cand.fc)}) + ${cand.bLabel}(${squareName(cand.tr,cand.tc)}) → ${cand.label}`;
+
+    card.appendChild(grid);
+    card.appendChild(arrow);
+    card.appendChild(outputEl);
+    card.appendChild(info);
+
+    card.onclick=()=>{
       sendAction({type:"forge",fr:cand.fr,fc:cand.fc,tr:cand.tr,tc:cand.tc});
       document.getElementById("forgeModal").classList.add("hidden");
     };
-    box.appendChild(btn);
+    box.appendChild(card);
   }
   document.getElementById("forgeModal").classList.remove("hidden");
 }
@@ -231,13 +294,8 @@ function drawBoard(){
     if(p){
       const el=document.createElement("span");
       el.className=p.color==="white"?"white-piece":"black-piece";
-      if(p.type==="pawn"&&p.gun){el.className+=" gun-pawn";el.textContent=p.color==="white"?"♙":"♟"}
-      else if(p.type==="wildHorse")el.textContent=p.color==="white"?"♘":"♞";
-      else if(p.type==="necromancer")el.textContent=p.color==="white"?"♗":"♝";
-      else if(p.type==="cavalry")el.textContent=p.color==="white"?"♘":"♞";
-      else if(p.type==="tank")el.textContent="▣";
-      else if(p.type==="colossus")el.textContent=p.color==="white"?"♔":"♚";
-      else el.textContent=p.symbol;
+      if(p.type==="pawn"&&p.gun)el.className+=" gun-pawn";
+      el.textContent=pieceGlyph(p);
 
       if(p.type==="turret"){
         if(p.turretDisabled)el.classList.add("turret-disabled");

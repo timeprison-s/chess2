@@ -12,8 +12,9 @@ const rooms = new Map();
  *
  * 장갑(armored): 룩과 결합해 만들어진 기물(포탑/전차)이 갖는다. 목숨이 2개.
  * 관통(piercing): 이름에 "전차"나 "포"가 들어간 기물(전차/포탑)이 갖는다.
- * 화(fire): 아직 자동으로 부여하는 규칙은 없다. 특성 자체만 우선 구현.
- * 냉(cold): 게임 시작 시 각 진영에서 무작위로 기물 1개에 부여된다.
+ * 화(fire): 게임 시작 시 보드 전체에서 무작위로 기물 딱 1개에게 부여된다.
+ * 냉(cold): 게임 시작 시 보드 전체에서 무작위로 기물 딱 1개에게 부여된다
+ *           (화 속성을 받은 기물과는 겹치지 않도록 한다).
  *           냉 속성 기물은 관통 또는 화 속성을 가진 공격에만 피해를 입는다.
  */
 function computeAttributes(type) {
@@ -57,15 +58,17 @@ function canDamage(attackerAttrs, defenderAttrs) {
 }
 
 /*
- * 냉 속성 무작위 부여. 킹은 제외한다(킹이 사실상 무적이 되는 것을 막기 위함).
+ * 냉/화 속성을 보드 전체에서 딱 1개씩만 무작위로 부여한다(진영 구분 없음).
+ * 킹은 대상에서 제외한다(킹이 사실상 무적이 되는 것을 막기 위함).
+ * 같은 기물이 냉/화를 동시에 받지 않도록 한다.
  */
-function assignColdAttribute(board, color) {
+function assignRandomAttributes(board) {
     const candidates = [];
 
     for (let r = 0; r < 8; r++) {
         for (let c = 0; c < 8; c++) {
             const p = board[r][c];
-            if (p && p.color === color && p.type !== "king") {
+            if (p && p.type !== "king") {
                 candidates.push(p);
             }
         }
@@ -73,8 +76,13 @@ function assignColdAttribute(board, color) {
 
     if (candidates.length === 0) return;
 
-    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
-    chosen.attributes.cold = true;
+    const coldPick = candidates[Math.floor(Math.random() * candidates.length)];
+    coldPick.attributes.cold = true;
+
+    const fireCandidates = candidates.filter(p => p !== coldPick);
+    const firePool = fireCandidates.length > 0 ? fireCandidates : candidates;
+    const firePick = firePool[Math.floor(Math.random() * firePool.length)];
+    firePick.attributes.fire = true;
 }
 
 function initialBoard() {
@@ -125,8 +133,7 @@ function initialBoard() {
         ]
     ];
 
-    assignColdAttribute(board, "white");
-    assignColdAttribute(board, "black");
+    assignRandomAttributes(board);
 
     return board;
 }
