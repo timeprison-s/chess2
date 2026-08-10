@@ -26,7 +26,7 @@ function symbolFor(type, color) {
         queen: white ? "♕" : "♛", king: white ? "♔" : "♚",
         wildHorse: white ? "♘" : "♞", necromancer: white ? "♗" : "♝",
         cavalry: white ? "♘" : "♞", turret: white ? "♖" : "♜",
-        tank: white ? "♖" : "♜", colossus: white ? "♔" : "♚"
+        tank: white ? "♖" : "♜", colossus: white ? "♔" : "♚", hypnotist: white ? "♘" : "♞"
     }[type] || "?";
 }
 
@@ -37,7 +37,7 @@ function createPiece(type, color, symbol = symbolFor(type, color)) {
         maxAmmo: type === "turret" ? 8 : 0,
         turretHits: 0, turretDisabled: false,
         deathRow: null, deathCol: null, hasMoved: false,
-        oneShot: type === "tank"
+        oneShot: type === "tank", hypnotizing: false
     };
 }
 
@@ -58,7 +58,8 @@ function makeRoom(code) {
         deadPieces:{white:[],black:[]}, moves:[], moveCount:0,
         score:{white:0,black:0}, time:{white:600,black:600}, gameEnded:false,
         castling:{white:{king:false, queen:false}, black:{king:false, queen:false}},
-        colossusUsed:{white:false,black:false}
+        colossusUsed:{white:false,black:false},
+        hypnotizing:{white:null,black:null}
     };
 }
 
@@ -81,6 +82,7 @@ function canMove(room,fr,fc,tr,tc,ignoreTargetColor=false){
     if(p.type==="bishop") return dr===dc&&dr!==0&&clearPath(room.board,fr,fc,tr,tc);
     if(p.type==="queen") return ((fr===tr||fc===tc)||dr===dc)&&clearPath(room.board,fr,fc,tr,tc);
     if(p.type==="wildHorse") return dr<=2&&dc<=2&&(dr||dc);
+    if(p.type==="hypnotist") return dr<=1&&dc<=1&&(dr||dc);
     if(p.type==="cavalry") return (fr===tr||fc===tc)&&(dr||dc);
     if(p.type==="necromancer") return (dr===dc&&dr!==0&&clearPath(room.board,fr,fc,tr,tc)) || (dr<=1&&dc<=1&&(dr||dc));
     return false;
@@ -144,8 +146,26 @@ function consumeColossusResources(room,color){
 
 function findEmpty(room,r,c){return inside(r,c)&&!room.board[r][c];}
 
+function countPieces(room,color,type){
+    let n=0; for(const row of room.board) for(const p of row) if(p&&p.color===color&&p.type===type) n++; return n;
+}
+
+function completeHypnosis(room,color){
+    const h=room.hypnotizing[color];
+    if(!h) return;
+    const target=room.board[h.tr]?.[h.tc];
+    const hypnotist=room.board[h.hr]?.[h.hc];
+    if(!target || target.type==="queen" || !hypnotist || hypnotist.color!==color || hypnotist.type!=="hypnotist") {
+        room.hypnotizing[color]=null; return;
+    }
+    target.color=color; target.symbol=symbolFor(target.type,color);
+    room.board[h.tr][h.tc]=target;
+    room.hypnotizing[color]=null;
+    addMove(room,"[HYPNOSIS]"+squareName(h.tr,h.tc));
+}
+
 function broadcast(room){
-    const data=JSON.stringify({type:"state",board:room.board,currentTurn:room.currentTurn,moves:room.moves,time:room.time,gameEnded:room.gameEnded,moveCount:room.moveCount,score:room.score,players:{white:!!room.players.white,black:!!room.players.black},colossusReady:{white:room.moveCount>=30&&hasColossusResources(room,"white")&&!room.colossusUsed.white,black:room.moveCount>=30&&hasColossusResources(room,"black")&&!room.colossusUsed.black}});
+    const data=JSON.stringify({type:"state",board:room.board,currentTurn:room.currentTurn,moves:room.moves,time:room.time,gameEnded:room.gameEnded,moveCount:room.moveCount,score:room.score,players:{white:!!room.players.white,black:!!room.players.black},colossusReady:{white:room.moveCount>=30&&hasColossusResources(room,"white")&&!room.colossusUsed.white,black:room.moveCount>=30&&hasColossusResources(room,"black")&&!room.colossusUsed.black},hypnotizing:room.hypnotizing});
     for(const color of ["white","black"]){const ws=room.players[color];if(ws&&ws.readyState===WebSocket.OPEN)ws.send(data);}
 }
 function sendError(ws,message){ws.send(JSON.stringify({type:"error",message}));}
@@ -162,6 +182,14 @@ function handleAction(room,ws,action){
     if(room.gameEnded){sendError(ws,"게임이 종료되었습니다.");return;}
     if(room.currentTurn!==color){sendError(ws,"상대방의 턴입니다.");return;}
     if(room.frozenTurns[color]>0){sendError(ws,"킹이 잡혀 현재 움직일 수 없습니다.");return;}
+
+    if(room.hypnotizing[color]) {
+        completeHypnosis(room,color);
+        room.moveCount++;
+        nextTurn(room);
+        broadcast(room);
+        return;
+    }
 
     if(action.type==="move"){
         const {fr,fc,tr,tc}=action; const p=room.board[fr]?.[fc],target=room.board[tr]?.[tc];
@@ -180,7 +208,6 @@ function handleAction(room,ws,action){
         }
         const backward=(p.type==="pawn")&&((color==="white"&&tr>fr)||(color==="black"&&tr<fr));
         const specialPromotion=room.moveCount<5&&backward&&target&&target.color===color&&(target.type==="rook"||target.type==="queen");
-        if(target&&target.color===color&&!specialPromotion&&p.type!=="pawn"&&p.type!=="king"&&p.type!=="queen"&&p.type!=="rook"&&p.type!=="bishop"&&p.type!=="knight"&&p.type!=="wildHorse"&&p.type!=="necromancer"&&p.type!=="cavalry"){sendError(ws,"이동할 수 없습니다.");return;}
         let notation=squareName(fr,fc)+(target?"x":"-")+squareName(tr,tc);
         if(target)capture(room,tr,tc);
         if(specialPromotion){
@@ -214,11 +241,40 @@ function handleAction(room,ws,action){
         t.ammo--;cardinalBlast(room,action.tr,action.tc);addMove(room,squareName(action.fr,action.fc)+"[CANNON]"+squareName(action.tr,action.tc));room.moveCount++;finishIfNeeded(room);nextTurn(room);broadcast(room);return;
     }
     if(action.type==="combine"){
-        const a=room.board[action.fr]?.[action.fc],b=room.board[action.tr]?.[action.tc];if(!a||!b||a.color!==color||b.color!==color){sendError(ws,"합체할 수 없습니다.");return;}
-        let result=null;if(a.type==="knight"&&b.type==="knight")result="wildHorse";else if(a.type==="bishop"&&b.type==="bishop")result="necromancer";else if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))result="turret";else if((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))result="cavalry";else if(a.type==="rook"&&b.type==="rook")result="tank";
-        if(!result||a.gun||b.gun){sendError(ws,"이 두 기물은 합체할 수 없습니다.");return;}
+        const a=room.board[action.fr]?.[action.fc],b=room.board[action.tr]?.[action.tc];
+        if(!a||!b||a.color!==color||b.color!==color||a.gun||b.gun){sendError(ws,"합체할 수 없습니다.");return;}
+        let result=null, extra=[];
+        if(a.type==="knight"&&b.type==="knight")result="wildHorse";
+        else if(a.type==="bishop"&&b.type==="bishop")result="necromancer";
+        else if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))result="turret";
+        else if((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))result="cavalry";
+        else if(a.type==="rook"&&b.type==="rook")result="tank";
+        else if((a.type==="bishop"&&b.type==="pawn")||(a.type==="pawn"&&b.type==="bishop")){
+            if(countPieces(room,color,"pawn")<3){sendError(ws,"최면술사는 비숍 1개와 폰 3개가 필요합니다.");return;}
+            result="hypnotist";
+            let left=3;
+            for(let r=0;r<8&&left;r++)for(let c=0;c<8&&left;c++){
+                if((r===action.fr&&c===action.fc)||(r===action.tr&&c===action.tc))continue;
+                if(room.board[r][c]?.color===color&&room.board[r][c].type==="pawn"){extra.push([r,c]);left--;}
+            }
+            if(left){sendError(ws,"추가 폰 2개가 필요합니다.");return;}
+        }
+        if(!result){sendError(ws,"이 두 기물은 합체할 수 없습니다.");return;}
         let finalR=action.tr,finalC=action.tc;if(result==="turret"||result==="cavalry"){if(a.type!=="pawn"){finalR=action.fr;finalC=action.fc;}}
-        room.board[action.fr][action.fc]=null;room.board[action.tr][action.tc]=null;room.board[finalR][finalC]=createPiece(result,color);addMove(room,squareName(action.fr,action.fc)+"+"+squareName(action.tr,action.tc)+"["+result.toUpperCase()+"]");room.moveCount++;nextTurn(room);broadcast(room);return;
+        room.board[action.fr][action.fc]=null;room.board[action.tr][action.tc]=null;
+        for(const [r,c] of extra)room.board[r][c]=null;
+        room.board[finalR][finalC]=createPiece(result,color);
+        addMove(room,squareName(action.fr,action.fc)+"+"+squareName(action.tr,action.tc)+(extra.length?"+3P":"")+"["+result.toUpperCase()+"]");room.moveCount++;nextTurn(room);broadcast(room);return;
+    }
+
+    if(action.type==="hypnotize"){
+        const h=room.board[action.hr]?.[action.hc], target=room.board[action.tr]?.[action.tc];
+        if(!h||h.color!==color||h.type!=="hypnotist"||!target||target.color===color||target.type==="queen"){sendError(ws,"최면술사의 대상이 아닙니다.");return;}
+        if(room.hypnotizing[color]||countPieces(room,color,"pawn")<1){sendError(ws,"최면술을 사용할 수 없습니다.");return;}
+        let pawn=null; for(let r=0;r<8&&!pawn;r++)for(let c=0;c<8&&!pawn;c++)if(room.board[r][c]?.color===color&&room.board[r][c].type==="pawn")pawn=[r,c];
+        room.board[pawn[0]][pawn[1]]=null;
+        room.hypnotizing[color]={hr:action.hr,hc:action.hc,tr:action.tr,tc:action.tc};
+        addMove(room,"[HYPNOTIZE]"+squareName(action.tr,action.tc));room.moveCount++;nextTurn(room);broadcast(room);return;
     }
     if(action.type==="summonColossus"){
         if(room.moveCount<30||room.colossusUsed[color]||!hasColossusResources(room,color)){sendError(ws,"거신병 소환 조건이 아닙니다.");return;}
