@@ -90,6 +90,9 @@ function connect() {
 
         if (msg.type === "state") {
 
+            const previousSelected =
+                selected;
+
             boardState =
                 msg.board;
 
@@ -105,7 +108,29 @@ function connect() {
             gameEnded =
                 msg.gameEnded;
 
-            selected = null;
+            /*
+             * 타이머 갱신 등으로 인한
+             * state 메시지에서는 선택을
+             * 유지한다. 선택했던 칸의
+             * 기물이 사라졌거나 더 이상
+             * 내 기물이 아니면(=실제로
+             * 이동/포획이 일어난 경우)만
+             * 선택을 해제한다.
+             */
+            if (
+                previousSelected &&
+                boardState[previousSelected.r][previousSelected.c] &&
+                boardState[previousSelected.r][previousSelected.c].color === myColor
+            ) {
+
+                selected =
+                    previousSelected;
+            }
+
+            else {
+
+                selected = null;
+            }
 
             drawBoard();
             renderMoves();
