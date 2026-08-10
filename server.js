@@ -962,8 +962,10 @@ function handleAction(room, ws, action) {
 
 const server = http.createServer((req,res) => {
 
+    const urlPath = req.url.split("?")[0];
+
     let filePath =
-        req.url === "/"
+        urlPath === "/"
             ? path.join(
                 __dirname,
                 "public",
@@ -972,7 +974,7 @@ const server = http.createServer((req,res) => {
             : path.join(
                 __dirname,
                 "public",
-                req.url
+                urlPath
             );
 
     if (!fs.existsSync(filePath)) {
