@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Chess</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+    <div id="lobby">
+        <h1>Custom Chess Online</h1>
+
+        <div id="connectionStatus">
+            서버 연결 중...
+        </div>
+
+        <div class="room-controls">
+            <input
+                id="roomInput"
+                type="text"
+                placeholder="방 코드"
+                autocomplete="off"
+            >
+
+            <button id="joinButton">
+                방 참가
+            </button>
+        </div>
+    </div>
+
+
+    <div id="game" class="hidden">
+
+        <div id="roomInfo"></div>
+
+        <div class="game-layout">
+
+            <div class="board-container">
+                <div id="board"></div>
+            </div>
+
+
+            <aside class="game-info">
+
+                <div class="players">
+
+                    <div
+                        id="whitePlayer"
+                        class="player"
+                    >
+                        <span>백</span>
+                        <span id="whiteTimer">--:--</span>
+                    </div>
+
+                    <div
+                        id="blackPlayer"
+                        class="player"
+                    >
+                        <span>흑</span>
+                        <span id="blackTimer">--:--</span>
+                    </div>
+
+                </div>
+
+
+                <div id="status">
+                    대기 중...
+                </div>
+
+
+                <div class="moves">
+                    <h3>기보</h3>
+                    <div id="moveList"></div>
+                </div>
+
+            </aside>
+
+        </div>
+
+    </div>
+
+
+    <script src="/game.js"></script>
+
+</body>
+</html>
