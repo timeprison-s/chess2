@@ -168,7 +168,7 @@ body {
 
 .selected {
     outline:
-        5px solid red;
+        5px solid #f0d6c7;
 
     outline-offset: -5px;
 }
