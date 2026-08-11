@@ -27,7 +27,7 @@ body {
 ========================= */
 
 #lobby {
-    width: 400px;
+    width: 460px;
 
     padding: 35px;
 
@@ -648,37 +648,11 @@ body {
         2px 2px 2px black;
 }
 
-.piece-fire::after{
-    content: "화";
-
-    position: absolute;
-
-    left: -4px;
-    bottom: -2px;
-
-    color: #ffb066;
-
-    font-size: 12px;
-}
-
 .piece-cold{
     text-shadow:
         0 0 7px #4fa8ff,
         0 0 15px #0060d0,
         2px 2px 2px black;
-}
-
-.piece-cold::after{
-    content: "냉";
-
-    position: absolute;
-
-    left: 14px;
-    bottom: -2px;
-
-    color: #9fd3ff;
-
-    font-size: 12px;
 }
 
 /* =========================
@@ -963,4 +937,117 @@ body {
     font-size: 13px;
     text-align: center;
     padding: 10px 0;
+}
+
+/* =========================
+   로비 화면 전환 (메뉴 / 방 만들기 / 방 목록)
+========================= */
+.lobby-view.hidden{
+    display: none !important;
+}
+
+#lobbyMenu{
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+#lobbyMenu button{
+    padding: 14px;
+    border: 0;
+    border-radius: 6px;
+    background: #3d8cff;
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+#lobbyMenu button:hover{
+    background: #2f78e0;
+}
+
+#lobbyCreate{
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#lobbyCreate input{
+    width: 100%;
+    padding: 12px;
+    background: #111;
+    color: white;
+    border: 1px solid #555;
+    border-radius: 6px;
+    font-size: 15px;
+    text-align: center;
+}
+
+#createRoomButton{
+    width: 100%;
+    padding: 12px;
+    border: 0;
+    border-radius: 6px;
+    background: #3d8cff;
+    color: white;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.lobby-back-button{
+    padding: 10px 14px;
+    border: 0;
+    border-radius: 6px;
+    background: #444;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.lobby-back-button:hover{
+    background: #555;
+}
+
+#lobbyList{
+    margin-top: 20px;
+}
+
+.lobby-list-layout{
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    text-align: left;
+}
+
+.lobby-list-main{
+    flex: 1;
+    min-width: 0;
+}
+
+.lobby-list-main #refreshRoomsButton{
+    width: 100%;
+    padding: 10px;
+    border: 0;
+    border-radius: 6px;
+    background: #444;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+    margin-bottom: 10px;
+}
+
+.room-row .room-name{
+    font-weight: bold;
+    flex: 1;
+}
+
+.room-row .room-code{
+    font-family: monospace;
+    color: #888;
+    font-size: 12px;
 }

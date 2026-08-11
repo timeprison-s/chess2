@@ -145,9 +145,10 @@ function initialBoard() {
     return board;
 }
 
-function makeRoom(code, password) {
+function makeRoom(code, password, name) {
     return {
         code,
+        name: name || code,
         password: password || null,
         board: initialBoard(),
 
@@ -694,6 +695,7 @@ function getRoomListPayload() {
 
         list.push({
             code,
+            name: room.name || code,
             hasPassword: !!room.password,
             playerCount,
             full: playerCount >= 2,
@@ -1752,8 +1754,13 @@ wss.on("connection", ws => {
                     ? msg.password.trim()
                     : null;
 
+            const name =
+                typeof msg.name === "string" && msg.name.trim()
+                    ? msg.name.trim().slice(0, 20)
+                    : null;
+
             const code = generateRoomCode();
-            const room = makeRoom(code, password);
+            const room = makeRoom(code, password, name);
 
             rooms.set(code, room);
 

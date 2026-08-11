@@ -16,8 +16,20 @@
             서버 연결 중...
         </div>
 
-        <div class="lobby-section">
-            <h3>방 만들기</h3>
+        <!-- 진입 메뉴: 방 만들기 / 방 목록 -->
+        <div id="lobbyMenu" class="lobby-view">
+            <button id="menuCreateButton">방 만들기</button>
+            <button id="menuListButton">방 목록</button>
+        </div>
+
+        <!-- 방 만들기 화면 -->
+        <div id="lobbyCreate" class="lobby-view hidden">
+            <input
+                id="createNameInput"
+                type="text"
+                placeholder="방 이름"
+                autocomplete="off"
+            >
             <input
                 id="createPasswordInput"
                 type="password"
@@ -25,35 +37,19 @@
                 autocomplete="off"
             >
             <button id="createRoomButton">방 만들기</button>
+            <button id="createBackButton" class="lobby-back-button">메뉴로 돌아가기</button>
         </div>
 
-        <div class="lobby-section">
-            <h3>방 목록</h3>
-            <button id="refreshRoomsButton">새로고침</button>
-            <div id="roomList" class="room-list">
-                <div class="room-list-empty">방이 없습니다.</div>
-            </div>
-        </div>
-
-        <div class="lobby-section">
-            <h3>코드로 참가</h3>
-            <div class="room-controls">
-                <input
-                    id="roomInput"
-                    type="text"
-                    placeholder="방 코드"
-                    autocomplete="off"
-                >
-                <input
-                    id="joinPasswordInput"
-                    type="password"
-                    placeholder="비밀번호 (있는 경우)"
-                    autocomplete="off"
-                >
-
-                <button id="joinButton">
-                    방 참가
-                </button>
+        <!-- 방 목록 화면 -->
+        <div id="lobbyList" class="lobby-view hidden">
+            <div class="lobby-list-layout">
+                <button id="listBackButton" class="lobby-back-button">메뉴로 돌아가기</button>
+                <div class="lobby-list-main">
+                    <button id="refreshRoomsButton">새로고침</button>
+                    <div id="roomList" class="room-list">
+                        <div class="room-list-empty">방이 없습니다.</div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

@@ -4,7 +4,7 @@ let lastStateAt=Date.now(), localTimer=null;
 function connect(){
   const protocol=location.protocol==="https:"?"wss:":"ws:";
   socket=new WebSocket(protocol+"//"+location.host);
-  socket.onopen=()=>{document.getElementById("connectionStatus").textContent="서버 연결 완료";document.getElementById("joinButton").disabled=false};
+  socket.onopen=()=>{document.getElementById("connectionStatus").textContent="서버 연결 완료"};
   socket.onmessage=e=>{
     const m=JSON.parse(e.data);
     if(m.type==="joined"){
@@ -33,20 +33,41 @@ function connect(){
 
 function sendRaw(obj){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(obj))}
 
-document.getElementById("joinButton").addEventListener("click",joinRoom);
-document.getElementById("roomInput").addEventListener("keydown",e=>{if(e.key==="Enter")joinRoom()});
-function joinRoom(){
-  const code=document.getElementById("roomInput").value.trim();
-  if(!code)return alert("방 코드를 입력해라.");
-  if(!socket||socket.readyState!==WebSocket.OPEN)return alert("서버에 연결되지 않았다.");
-  const password=document.getElementById("joinPasswordInput").value;
-  sendRaw({type:"join",room:code,password});
+/*
+ * 로비 화면 전환: 메뉴(진입) / 방 만들기 / 방 목록
+ */
+const lobbyMenu=document.getElementById("lobbyMenu");
+const lobbyCreate=document.getElementById("lobbyCreate");
+const lobbyList=document.getElementById("lobbyList");
+
+function showLobbyView(view){
+  lobbyMenu.classList.toggle("hidden",view!=="menu");
+  lobbyCreate.classList.toggle("hidden",view!=="create");
+  lobbyList.classList.toggle("hidden",view!=="list");
 }
+
+document.getElementById("menuCreateButton").addEventListener("click",()=>{
+  showLobbyView("create");
+});
+
+document.getElementById("menuListButton").addEventListener("click",()=>{
+  showLobbyView("list");
+  sendRaw({type:"listRooms"});
+});
+
+document.getElementById("createBackButton").addEventListener("click",()=>{
+  showLobbyView("menu");
+});
+
+document.getElementById("listBackButton").addEventListener("click",()=>{
+  showLobbyView("menu");
+});
 
 document.getElementById("createRoomButton").addEventListener("click",()=>{
   if(!socket||socket.readyState!==WebSocket.OPEN)return alert("서버에 연결되지 않았다.");
+  const name=document.getElementById("createNameInput").value.trim();
   const password=document.getElementById("createPasswordInput").value;
-  sendRaw({type:"createRoom",password});
+  sendRaw({type:"createRoom",name,password});
 });
 
 document.getElementById("refreshRoomsButton").addEventListener("click",()=>{
@@ -54,8 +75,8 @@ document.getElementById("refreshRoomsButton").addEventListener("click",()=>{
 });
 
 /*
- * 방 목록 렌더링. 비밀번호가 걸린 방은 자물쇠 표시를 하고,
- * 참가 버튼을 누르면 비밀번호를 물어본다.
+ * 방 목록 렌더링. 방 이름을 주로 보여주고 코드는 작게 함께 표시한다.
+ * 비밀번호가 걸린 방은 자물쇠 표시를 하고, 참가 버튼을 누르면 비밀번호를 물어본다.
  */
 function renderRoomList(rooms){
   const box=document.getElementById("roomList");
@@ -72,6 +93,11 @@ function renderRoomList(rooms){
   for(const room of rooms){
     const row=document.createElement("div");
     row.className="room-row";
+
+    const name=document.createElement("span");
+    name.className="room-name";
+    name.textContent=room.name||room.code;
+    row.appendChild(name);
 
     const code=document.createElement("span");
     code.className="room-code";
