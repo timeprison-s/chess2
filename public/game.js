@@ -14,6 +14,10 @@ function connect(){
       document.getElementById("roomInfo").textContent=`ROOM: ${roomCode} / YOU: ${myColor.toUpperCase()}`;
       return;
     }
+    if(m.type==="roomList"){
+      renderRoomList(m.rooms||[]);
+      return;
+    }
     if(m.type==="state"){
       lastStateAt=Date.now();
       boardState=m.board;currentTurn=m.currentTurn;moves=m.moves;time=m.time;gameEnded=m.gameEnded;
@@ -27,14 +31,81 @@ function connect(){
   socket.onclose=()=>document.getElementById("connectionStatus").textContent="서버 연결 끊김";
 }
 
+function sendRaw(obj){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(obj))}
+
 document.getElementById("joinButton").addEventListener("click",joinRoom);
 document.getElementById("roomInput").addEventListener("keydown",e=>{if(e.key==="Enter")joinRoom()});
 function joinRoom(){
   const code=document.getElementById("roomInput").value.trim();
   if(!code)return alert("방 코드를 입력해라.");
   if(!socket||socket.readyState!==WebSocket.OPEN)return alert("서버에 연결되지 않았다.");
-  socket.send(JSON.stringify({type:"join",room:code}));
+  const password=document.getElementById("joinPasswordInput").value;
+  sendRaw({type:"join",room:code,password});
 }
+
+document.getElementById("createRoomButton").addEventListener("click",()=>{
+  if(!socket||socket.readyState!==WebSocket.OPEN)return alert("서버에 연결되지 않았다.");
+  const password=document.getElementById("createPasswordInput").value;
+  sendRaw({type:"createRoom",password});
+});
+
+document.getElementById("refreshRoomsButton").addEventListener("click",()=>{
+  sendRaw({type:"listRooms"});
+});
+
+/*
+ * 방 목록 렌더링. 비밀번호가 걸린 방은 자물쇠 표시를 하고,
+ * 참가 버튼을 누르면 비밀번호를 물어본다.
+ */
+function renderRoomList(rooms){
+  const box=document.getElementById("roomList");
+  box.innerHTML="";
+
+  if(rooms.length===0){
+    const empty=document.createElement("div");
+    empty.className="room-list-empty";
+    empty.textContent="방이 없습니다.";
+    box.appendChild(empty);
+    return;
+  }
+
+  for(const room of rooms){
+    const row=document.createElement("div");
+    row.className="room-row";
+
+    const code=document.createElement("span");
+    code.className="room-code";
+    code.textContent=room.code;
+    row.appendChild(code);
+
+    if(room.hasPassword){
+      const lock=document.createElement("span");
+      lock.className="room-lock";
+      lock.textContent="🔒";
+      row.appendChild(lock);
+    }
+
+    const players=document.createElement("span");
+    players.className="room-players";
+    players.textContent=room.full?"가득참":`${room.playerCount}/2`;
+    row.appendChild(players);
+
+    const btn=document.createElement("button");
+    btn.textContent="참가";
+    btn.disabled=room.full;
+    btn.onclick=()=>{
+      let password="";
+      if(room.hasPassword){
+        password=prompt("비밀번호를 입력하세요:")||"";
+      }
+      sendRaw({type:"join",room:room.code,password});
+    };
+    row.appendChild(btn);
+
+    box.appendChild(row);
+  }
+}
+
 function sendAction(action){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:"action",action}))}
 
 function inside(r,c){return r>=0&&r<8&&c>=0&&c<8}

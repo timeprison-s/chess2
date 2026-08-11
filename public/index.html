@@ -16,17 +16,45 @@
             서버 연결 중...
         </div>
 
-        <div class="room-controls">
+        <div class="lobby-section">
+            <h3>방 만들기</h3>
             <input
-                id="roomInput"
-                type="text"
-                placeholder="방 코드"
+                id="createPasswordInput"
+                type="password"
+                placeholder="비밀번호 (선택 사항)"
                 autocomplete="off"
             >
+            <button id="createRoomButton">방 만들기</button>
+        </div>
 
-            <button id="joinButton">
-                방 참가
-            </button>
+        <div class="lobby-section">
+            <h3>방 목록</h3>
+            <button id="refreshRoomsButton">새로고침</button>
+            <div id="roomList" class="room-list">
+                <div class="room-list-empty">방이 없습니다.</div>
+            </div>
+        </div>
+
+        <div class="lobby-section">
+            <h3>코드로 참가</h3>
+            <div class="room-controls">
+                <input
+                    id="roomInput"
+                    type="text"
+                    placeholder="방 코드"
+                    autocomplete="off"
+                >
+                <input
+                    id="joinPasswordInput"
+                    type="password"
+                    placeholder="비밀번호 (있는 경우)"
+                    autocomplete="off"
+                >
+
+                <button id="joinButton">
+                    방 참가
+                </button>
+            </div>
         </div>
     </div>
 
@@ -36,6 +64,17 @@
         <div id="roomInfo"></div>
 
         <div class="game-layout">
+
+            <div class="left-panel">
+                <button id="forgeButton" class="hidden" title="연성대 (기물 합성)">
+                    <span class="forge-btn-grid">
+                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
+                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
+                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
+                    </span>
+                    <span class="forge-btn-label">연성대</span>
+                </button>
+            </div>
 
             <div class="board-container">
                 <div id="board"></div>
@@ -75,15 +114,6 @@
 
                 <button id="colossusButton" class="hidden">거신병 소환</button>
 
-                <button id="forgeButton" class="hidden" title="연성대 (기물 합성)">
-                    <span class="forge-btn-grid">
-                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
-                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
-                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
-                    </span>
-                    <span class="forge-btn-label">연성대</span>
-                </button>
-
                 <button id="restartButton">
                     다시 시작
                 </button>
@@ -122,7 +152,7 @@
         </div>
     </div>
 
-    <script src="/game.js?v=7"></script>
+    <script src="/game.js?v=8"></script>
 
 </body>
 </html>

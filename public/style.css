@@ -569,6 +569,17 @@ body {
     gap: 30px;
 }
 
+.left-panel {
+    width: 140px;
+    flex-shrink: 0;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    padding-top: 280px;
+}
+
 .board-container {
     flex-shrink: 0;
 }
@@ -627,29 +638,47 @@ body {
 }
 
 /* =========================
-   화(붉은 테두리) / 냉(푸른 테두리) 속성
-   문자 아이콘 대신 칸 테두리 색으로 구분한다.
+   화(붉은 글로우+배지) / 냉(푸른 글로우+배지) 속성
+   네크로맨서/야생마와 같은 방식(글로우 + 모서리 글자 배지)으로 구분한다.
 ========================= */
-/*
- * 화(붉은 테두리) / 냉(푸른 테두리) 속성.
- * 칸이 아니라 기물 자체에 테두리(outline)를 둘러서 표시한다.
- */
 .piece-fire{
-    outline:3px solid rgba(255,70,50,.9);
-    outline-offset:3px;
-    border-radius:50%;
+    text-shadow:
+        0 0 7px #ff6a3c,
+        0 0 15px #ff2d00,
+        2px 2px 2px black;
+}
+
+.piece-fire::after{
+    content: "화";
+
+    position: absolute;
+
+    left: -4px;
+    bottom: -2px;
+
+    color: #ffb066;
+
+    font-size: 12px;
 }
 
 .piece-cold{
-    outline:3px solid rgba(60,140,255,.9);
-    outline-offset:3px;
-    border-radius:50%;
+    text-shadow:
+        0 0 7px #4fa8ff,
+        0 0 15px #0060d0,
+        2px 2px 2px black;
 }
 
-.piece-fire.piece-cold{
-    outline:3px solid rgba(255,70,50,.9);
-    box-shadow:0 0 0 6px rgba(60,140,255,.9);
-    border-radius:50%;
+.piece-cold::after{
+    content: "냉";
+
+    position: absolute;
+
+    left: 14px;
+    bottom: -2px;
+
+    color: #9fd3ff;
+
+    font-size: 12px;
 }
 
 /* =========================
@@ -832,4 +861,106 @@ body {
 
 .singularity-target{
     box-shadow:inset 0 0 0 4px rgba(180,80,255,.4);
+}
+
+/* =========================
+   로비: 방 만들기 / 방 목록
+========================= */
+.lobby-section{
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid #3a3a3a;
+    text-align: left;
+}
+
+.lobby-section h3{
+    margin: 0 0 10px;
+    font-size: 14px;
+    color: #aaa;
+    text-align: center;
+}
+
+.lobby-section input{
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 8px;
+    background: #111;
+    color: white;
+    border: 1px solid #555;
+    border-radius: 6px;
+    font-size: 14px;
+    text-align: center;
+}
+
+#createRoomButton,
+#refreshRoomsButton{
+    width: 100%;
+    padding: 10px;
+    border: 0;
+    border-radius: 6px;
+    background: #3d8cff;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+#refreshRoomsButton{
+    background: #444;
+    margin-bottom: 10px;
+}
+
+.room-list{
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.room-row{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: #181818;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+.room-row .room-code{
+    font-family: monospace;
+    font-weight: bold;
+    flex: 1;
+}
+
+.room-row .room-lock{
+    color: #e0a940;
+}
+
+.room-row .room-players{
+    color: #aaa;
+    font-size: 12px;
+}
+
+.room-row button{
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: #3d8cff;
+    color: white;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.room-row button:disabled{
+    background: #555;
+    cursor: not-allowed;
+}
+
+.room-list-empty{
+    color: #777;
+    font-size: 13px;
+    text-align: center;
+    padding: 10px 0;
 }

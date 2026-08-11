@@ -145,9 +145,10 @@ function initialBoard() {
     return board;
 }
 
-function makeRoom(code) {
+function makeRoom(code, password) {
     return {
         code,
+        password: password || null,
         board: initialBoard(),
 
         players: {
@@ -672,6 +673,64 @@ function sendError(ws, message) {
         type: "error",
         message
     }));
+}
+
+/*
+ * 로비(방 목록) 처리.
+ *
+ * 아직 어느 방에도 들어가지 않은 소켓들을 lobbySockets에 담아두고,
+ * 방이 새로 생기거나/차거나/사라질 때마다 그 소켓들에게 최신 목록을 보낸다.
+ * 비밀번호 자체는 절대 내려보내지 않고, 잠겨있는지 여부만 알려준다.
+ */
+const lobbySockets = new Set();
+
+function getRoomListPayload() {
+    const list = [];
+
+    for (const [code, room] of rooms.entries()) {
+        const playerCount =
+            (room.players.white ? 1 : 0) +
+            (room.players.black ? 1 : 0);
+
+        list.push({
+            code,
+            hasPassword: !!room.password,
+            playerCount,
+            full: playerCount >= 2,
+            gameEnded: room.gameEnded
+        });
+    }
+
+    list.sort((a,b) => a.code.localeCompare(b.code));
+
+    return {
+        type: "roomList",
+        rooms: list
+    };
+}
+
+function broadcastLobby() {
+    const payload = JSON.stringify(getRoomListPayload());
+
+    for (const ws of lobbySockets) {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(payload);
+        }
+    }
+}
+
+function generateRoomCode() {
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let code;
+
+    do {
+        code = "";
+        for (let i = 0; i < 4; i++) {
+            code += letters[Math.floor(Math.random() * letters.length)];
+        }
+    } while (rooms.has(code));
+
+    return code;
 }
 
 function handleAction(room, ws, action) {
@@ -1646,6 +1705,9 @@ const wss =
 
 wss.on("connection", ws => {
 
+    lobbySockets.add(ws);
+    ws.send(JSON.stringify(getRoomListPayload()));
+
     ws.on("message", raw => {
 
         let msg;
@@ -1660,6 +1722,59 @@ wss.on("connection", ws => {
                 ws,
                 "잘못된 데이터입니다."
             );
+            return;
+        }
+
+
+        /*
+         * 로비 목록 새로고침 요청.
+         */
+        if (
+            msg.type === "listRooms"
+        ) {
+            ws.send(JSON.stringify(getRoomListPayload()));
+            return;
+        }
+
+
+        /*
+         * 방 생성.
+         *
+         * 코드가 자동으로 생성되고, 만든 사람이 곧바로 백으로 입장한다.
+         * 비밀번호는 선택 사항이다.
+         */
+        if (
+            msg.type === "createRoom"
+        ) {
+
+            const password =
+                typeof msg.password === "string" && msg.password.trim()
+                    ? msg.password.trim()
+                    : null;
+
+            const code = generateRoomCode();
+            const room = makeRoom(code, password);
+
+            rooms.set(code, room);
+
+            room.players.white = ws;
+
+            ws.room = code;
+            ws.color = "white";
+
+            lobbySockets.delete(ws);
+
+            ws.send(
+                JSON.stringify({
+                    type: "joined",
+                    color: "white",
+                    room: code
+                })
+            );
+
+            broadcast(room);
+            broadcastLobby();
+
             return;
         }
 
@@ -1689,6 +1804,7 @@ wss.on("connection", ws => {
             let room =
                 rooms.get(code);
 
+            const isNewRoom = !room;
 
             if (!room) {
 
@@ -1699,6 +1815,18 @@ wss.on("connection", ws => {
                     code,
                     room
                 );
+            }
+
+            if (
+                !isNewRoom &&
+                room.password &&
+                room.password !== String(msg.password || "")
+            ) {
+                sendError(
+                    ws,
+                    "비밀번호가 틀렸습니다."
+                );
+                return;
             }
 
 
@@ -1727,6 +1855,8 @@ wss.on("connection", ws => {
             ws.room = code;
             ws.color = color;
 
+            lobbySockets.delete(ws);
+
 
             ws.send(
                 JSON.stringify({
@@ -1738,6 +1868,7 @@ wss.on("connection", ws => {
 
 
             broadcast(room);
+            broadcastLobby();
 
             return;
         }
@@ -1772,6 +1903,8 @@ wss.on("connection", ws => {
 
     ws.on("close", () => {
 
+        lobbySockets.delete(ws);
+
         const room =
             rooms.get(ws.room);
 
@@ -1801,6 +1934,8 @@ wss.on("connection", ws => {
         ) {
             rooms.delete(ws.room);
         }
+
+        broadcastLobby();
     });
 });
 
