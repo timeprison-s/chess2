@@ -150,17 +150,23 @@ function pieceGlyph(p){
 }
 
 /*
- * 연성대: 서로 3*3칸(체비셰프 거리 <= 2) 이내에 있는 아군 조합을 모두 찾는다.
+ * 연성대: 서로 3*3칸(체비셰프 거리 <= 2) 이내에 있는 아군 조합을 찾는다.
+ * onlyR/onlyC를 넘기면, 그 칸의 기물이 참여하는 조합만 반환한다
+ * (= 지금 선택된 기물이 연성할 수 있는 경우만 표시하기 위함).
  * 최종 소환 위치는 서버 로직(포탑=룩 자리, 기마병=폰 자리, 그 외=중간지점 반올림)과 동일하게 계산하고,
  * 그 위치를 중심으로 한 3*3 미리보기 그리드(마인크래프트 제작대 느낌)도 함께 만든다.
  */
-function getForgeCandidates(){
+function getForgeCandidates(onlyR,onlyC){
   const pieces=[];
   for(let r=0;r<8;r++)for(let c=0;c<8;c++){const p=boardState[r]?.[c];if(p&&p.color===myColor)pieces.push({r,c,p})}
   const out=[];
   for(let i=0;i<pieces.length;i++){
     for(let j=i+1;j<pieces.length;j++){
       const A=pieces[i],B=pieces[j];
+      if(onlyR!==undefined&&onlyC!==undefined){
+        const involvesSelected=(A.r===onlyR&&A.c===onlyC)||(B.r===onlyR&&B.c===onlyC);
+        if(!involvesSelected)continue;
+      }
       if(!combinable(A.p,B.p))continue;
       if(chebyshev(A.r,A.c,B.r,B.c)>2)continue;
       const info=combineResultInfo(A.p,B.p);
@@ -200,7 +206,8 @@ function getForgeCandidates(){
 }
 
 function openForgeModal(){
-  const candidates=getForgeCandidates();
+  if(!selected)return;
+  const candidates=getForgeCandidates(selected.r,selected.c);
   if(candidates.length===0)return;
   const box=document.getElementById("forgeOptions");
   box.innerHTML="";
@@ -470,7 +477,7 @@ function updateUI(){
   const colossusAvailable=(colossusReady[myColor]||colossusSacrificeReady[myColor]);
   document.getElementById("colossusButton").classList.toggle("hidden",!colossusAvailable||currentTurn!==myColor||gameEnded);
 
-  const forgeAvailable=currentTurn===myColor&&!gameEnded&&boardState&&getForgeCandidates().length>0;
+  const forgeAvailable=currentTurn===myColor&&!gameEnded&&boardState&&selected&&getForgeCandidates(selected.r,selected.c).length>0;
   document.getElementById("forgeButton").classList.toggle("hidden",!forgeAvailable);
 }
 
