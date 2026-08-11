@@ -273,7 +273,12 @@ function showPromotion(){
   });
 }
 
-const ATTR_ICON={armored:"🛡",piercing:"⚔",fire:"🔥",cold:"❄"};
+/*
+ * 화/냉 속성은 더 이상 문자 아이콘으로 표시하지 않는다.
+ * 대신 drawBoard()에서 칸에 attr-fire(붉은 테두리)/attr-cold(푸른 테두리)
+ * 클래스를 붙여 겉모습으로 구분한다.
+ */
+const ATTR_ICON={armored:"🛡",piercing:"⚔"};
 
 function drawBoard(){
   const board=document.getElementById("board");
@@ -322,6 +327,8 @@ function drawBoard(){
           lifeTag.textContent="♥"+p.lives;
           s.appendChild(lifeTag);
         }
+        if(p.attributes.fire)s.classList.add("attr-fire");
+        if(p.attributes.cold)s.classList.add("attr-cold");
       }
     }
 

@@ -13,8 +13,8 @@ const rooms = new Map();
  * 장갑(armored): 룩과 결합해 만들어진 기물(포탑/전차)이 갖는다. 목숨이 2개.
  * 관통(piercing): 이름에 "전차"나 "포"가 들어간 기물(전차/포탑)이 갖는다.
  * 화(fire): 게임 시작 시 보드 전체에서 무작위로 기물 딱 1개에게 부여된다.
- * 냉(cold): 게임 시작 시 보드 전체에서 무작위로 기물 딱 1개에게 부여된다
- *           (화 속성을 받은 기물과는 겹치지 않도록 한다).
+ * 냉(cold): 게임 시작 시 화 속성을 받은 기물의 반대 진영에서 무작위로 기물
+ *           딱 1개에게 부여된다(같은 진영끼리는 겹치지 않는다).
  *           냉 속성 기물은 관통 또는 화 속성을 가진 공격에만 피해를 입는다.
  */
 function computeAttributes(type) {
@@ -58,9 +58,10 @@ function canDamage(attackerAttrs, defenderAttrs) {
 }
 
 /*
- * 냉/화 속성을 보드 전체에서 딱 1개씩만 무작위로 부여한다(진영 구분 없음).
+ * 냉/화 속성을 보드 전체에서 딱 1개씩만 무작위로 부여하되,
+ * 화 속성을 받은 기물의 진영과 냉 속성을 받은 기물의 진영이
+ * 서로 반대가 되도록 한다(예: 화가 백에게 가면 냉은 반드시 흑에게 간다).
  * 킹은 대상에서 제외한다(킹이 사실상 무적이 되는 것을 막기 위함).
- * 같은 기물이 냉/화를 동시에 받지 않도록 한다.
  */
 function assignRandomAttributes(board) {
     const candidates = [];
@@ -76,13 +77,19 @@ function assignRandomAttributes(board) {
 
     if (candidates.length === 0) return;
 
-    const coldPick = candidates[Math.floor(Math.random() * candidates.length)];
-    coldPick.attributes.cold = true;
-
-    const fireCandidates = candidates.filter(p => p !== coldPick);
-    const firePool = fireCandidates.length > 0 ? fireCandidates : candidates;
-    const firePick = firePool[Math.floor(Math.random() * firePool.length)];
+    const firePick = candidates[Math.floor(Math.random() * candidates.length)];
     firePick.attributes.fire = true;
+
+    const oppositeColor = firePick.color === "white" ? "black" : "white";
+    const coldCandidates = candidates.filter(p => p !== firePick && p.color === oppositeColor);
+    const coldPool = coldCandidates.length > 0
+        ? coldCandidates
+        : candidates.filter(p => p !== firePick);
+
+    if (coldPool.length === 0) return;
+
+    const coldPick = coldPool[Math.floor(Math.random() * coldPool.length)];
+    coldPick.attributes.cold = true;
 }
 
 function initialBoard() {
