@@ -142,13 +142,27 @@
     <div id="forgeModal" class="promotion-modal hidden">
         <div class="promotion-box">
             <h2>연성대</h2>
-            <p>제작대처럼 3*3칸 안에서 조합을 선택하세요</p>
-            <div id="forgeOptions" class="forge-options"></div>
+            <p>기물을 드래그해서 아래 칸에 올리세요 (또는 클릭해서 놓기)</p>
+            <div class="forge-slots">
+                <div id="forgeSlotA" class="forge-slot">
+                    <span class="forge-slot-label">재료 1</span>
+                </div>
+                <div class="forge-plus">+</div>
+                <div id="forgeSlotB" class="forge-slot">
+                    <span class="forge-slot-label">재료 2</span>
+                </div>
+                <div class="craft-arrow">→</div>
+                <div id="forgeOutputSlot" class="forge-slot forge-output">
+                    <span class="forge-slot-label">결과</span>
+                </div>
+            </div>
+            <div id="forgeResultInfo" class="craft-info"></div>
+            <button id="forgeConfirm" class="hidden">연성하기</button>
             <button id="forgeCancel" class="forge-cancel">취소</button>
         </div>
     </div>
 
-    <script src="/game.js?v=8"></script>
+    <script src="/game.js?v=9"></script>
 
 </body>
 </html>

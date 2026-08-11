@@ -1051,3 +1051,91 @@ body {
     color: #888;
     font-size: 12px;
 }
+
+/* =========================
+   연성대: 드래그 슬롯
+========================= */
+.forge-slots{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.forge-plus,
+.forge-slots .craft-arrow{
+    font-size: 22px;
+    color: #e0a940;
+    flex-shrink: 0;
+}
+
+.forge-slot{
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #241a11;
+    border: 2px dashed #6b4a2f;
+    border-radius: 8px;
+
+    font-size: 34px;
+
+    cursor: pointer;
+}
+
+.forge-slot .forge-slot-label{
+    font-size: 11px;
+    color: #8a6c46;
+    text-align: center;
+}
+
+.forge-slot.filled{
+    border-style: solid;
+    border-color: #c8862f;
+    background: #3a2a1d;
+}
+
+.forge-slot.drag-over{
+    border-color: #ffd27a;
+    background: #4a3624;
+}
+
+.forge-slot.forge-output{
+    cursor: default;
+    border-color: #4a4a4a;
+}
+
+.forge-slot.forge-output.ready{
+    border-color: #4fd06a;
+    background: #1d3a24;
+}
+
+.forge-slot.forge-output.invalid{
+    border-color: #ff5c5c;
+    background: #3a1d1d;
+}
+
+#forgeConfirm{
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 0;
+    border-radius: 6px;
+    background: #3d8cff;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+#forgeConfirm:hover{
+    background: #2f78e0;
+}
+
+.piece-draggable{
+    cursor: grab;
+}

@@ -1186,10 +1186,9 @@ function handleAction(room, ws, action) {
     /*
      * 연성(forge).
      *
-     * 합성 가능한 두 기물이 서로 3*3칸 이내(체비셰프 거리 <= 2)에
-     * 있어야 연성대를 사용할 수 있다.
-     * 결과 기물은 두 기물이 이루는 3*3 영역의 가운데 칸에서 소환된다
-     * (두 좌표의 중간지점을 반올림). 단, 포탑은 룩이 있던 자리에서 소환된다.
+     * 합성 가능한 두 기물이라면 보드 어디에 있든(거리 제한 없이) 연성할 수 있다.
+     * 결과 기물은 두 기물 좌표의 중간지점(반올림)에서 소환된다.
+     * 단, 포탑은 룩이 있던 자리에서, 기마병은 폰이 있던 자리에서 소환된다.
      */
     if (action.type === "forge") {
 
@@ -1214,16 +1213,6 @@ function handleAction(room, ws, action) {
             b.gun
         ) {
             sendError(ws,"총이 장착된 폰은 연성할 수 없습니다.");
-            return;
-        }
-
-        const chebyshev = Math.max(
-            Math.abs(action.fr - action.tr),
-            Math.abs(action.fc - action.tc)
-        );
-
-        if (chebyshev > 2) {
-            sendError(ws,"연성대의 3*3 범위 밖에 있습니다.");
             return;
         }
 
