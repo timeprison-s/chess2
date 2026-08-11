@@ -36,7 +36,7 @@ function createPiece(type, color, symbol) {
         color,
         symbol,
         gun: false,
-        ammo: type === "turret" ? 8 : 0,
+        ammo: type === "turret" ? 1 : 0,
         maxAmmo: type === "turret" ? 8 : 0,
         turretHits: 0,
         turretDisabled: false,
@@ -816,6 +816,31 @@ function handleAction(room, ws, action) {
             return;
         }
 
+        /*
+         * 장갑(목숨 2) 기물을 일반 이동으로 공격했을 때:
+         * 완전히 처치하지 않고 목숨만 1 깎는다.
+         * 이때 공격한 기물은 그 칸으로 들어가지 않고 원래 자리에 그대로 남는다.
+         */
+        if (target && target.lives > 1) {
+            target.lives--;
+
+            if (target.type === "turret") {
+                target.turretDisabled = true;
+                target.turretHits = (target.turretHits || 0) + 1;
+            }
+
+            addMove(
+                room,
+                squareName(fr,fc) + "x" + squareName(tr,tc) + "(-1)"
+            );
+
+            finishIfNeeded(room);
+            advanceTurn(room);
+            broadcast(room);
+
+            return;
+        }
+
         let notation =
             squareName(tr,tc);
 
@@ -1141,6 +1166,44 @@ function handleAction(room, ws, action) {
             return;
         }
 
+        /*
+         * 포탑 재장전.
+         *
+         * 포탑 + 폰을 연성하면 새 기물을 만들지 않고 포탑의 탄약만 1 늘린다
+         * (최대치까지). 폰은 소모되고 포탑은 제자리에 그대로 남는다.
+         * 폰이 화/냉 속성을 갖고 있었다면 포탑도 그 속성을 이어받는다.
+         */
+        const turretPiece = a.type === "turret" ? a : (b.type === "turret" ? b : null);
+        const reloadPawn = a.type === "pawn" ? a : (b.type === "pawn" ? b : null);
+
+        if (turretPiece && reloadPawn && turretPiece !== reloadPawn) {
+            if (turretPiece.ammo >= turretPiece.maxAmmo) {
+                sendError(ws,"탄약이 이미 가득 찼습니다.");
+                return;
+            }
+
+            const pawnAt = a.type === "pawn"
+                ? { r: action.fr, c: action.fc }
+                : { r: action.tr, c: action.tc };
+
+            turretPiece.ammo++;
+
+            if (reloadPawn.attributes.fire) turretPiece.attributes.fire = true;
+            if (reloadPawn.attributes.cold) turretPiece.attributes.cold = true;
+
+            room.board[pawnAt.r][pawnAt.c] = null;
+
+            addMove(
+                room,
+                squareName(pawnAt.r, pawnAt.c) + "[RELOAD]"
+            );
+
+            advanceTurn(room);
+            broadcast(room);
+
+            return;
+        }
+
         let result = null;
 
         if (
@@ -1253,6 +1316,14 @@ function handleAction(room, ws, action) {
                 playerColor,
                 symbols[result]
             );
+
+        /*
+         * 화/냉 속성 상속: 연성에 사용된 두 기물 중 하나라도 화/냉 속성을
+         * 갖고 있었다면, 새로 만들어진 기물도 그 속성을 갖게 된다.
+         */
+        const newPiece = room.board[finalR][finalC];
+        if (a.attributes.fire || b.attributes.fire) newPiece.attributes.fire = true;
+        if (a.attributes.cold || b.attributes.cold) newPiece.attributes.cold = true;
 
         const codes = {
             wildHorse: "W",

@@ -107,10 +107,11 @@ function countOwn(type){
 
 /*
  * 연성(합성) 가능 여부 - 서버 판정 규칙과 동일하게 유지해야 한다.
+ * 포탑 + 폰은 새 기물이 아니라 "포탑 재장전"(탄약 +1)이다.
  */
 function combinable(a,b){
   if(!a||!b||a.color!==b.color||a.gun||b.gun)return false;
-  return(a.type==="knight"&&b.type==="knight")||(a.type==="bishop"&&b.type==="bishop")||(a.type==="rook"&&b.type==="rook")||((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"));
+  return(a.type==="knight"&&b.type==="knight")||(a.type==="bishop"&&b.type==="bishop")||(a.type==="rook"&&b.type==="rook")||((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="turret")||(a.type==="turret"&&b.type==="pawn"));
 }
 const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",queen:"퀸",king:"킹"};
 
@@ -119,7 +120,7 @@ const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",quee
  * (버그: 이 함수가 없어서 getForgeCandidates() 호출 시 예외가 발생 -> 연성대 버튼이
  * 계속 hidden 상태로 남아있었다.)
  */
-const RESULT_LABEL={wildHorse:"야생마",necromancer:"네크로맨서",tank:"전차",turret:"포탑",cavalry:"기마병"};
+const RESULT_LABEL={wildHorse:"야생마",necromancer:"네크로맨서",tank:"전차",turret:"포탑",cavalry:"기마병",reload:"포탑 탄약 +1"};
 function combineResultInfo(a,b){
   let result=null;
   if(a.type==="knight"&&b.type==="knight")result="wildHorse";
@@ -127,6 +128,7 @@ function combineResultInfo(a,b){
   else if(a.type==="rook"&&b.type==="rook")result="tank";
   else if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))result="turret";
   else if((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))result="cavalry";
+  else if((a.type==="pawn"&&b.type==="turret")||(a.type==="turret"&&b.type==="pawn"))result="reload";
   if(!result)return null;
   return {result,label:RESULT_LABEL[result]};
 }
@@ -178,6 +180,9 @@ function getForgeCandidates(onlyR,onlyC){
       } else if(info.result==="cavalry"){
         const pawnAt=A.p.type==="pawn"?A:B;
         finalR=pawnAt.r;finalC=pawnAt.c;
+      } else if(info.result==="reload"){
+        const turretAt=A.p.type==="turret"?A:B;
+        finalR=turretAt.r;finalC=turretAt.c;
       }
       const occupant=boardState[finalR]?.[finalC];
       if(occupant&&!(finalR===A.r&&finalC===A.c)&&!(finalR===B.r&&finalC===B.c))continue;
@@ -198,7 +203,7 @@ function getForgeCandidates(onlyR,onlyC){
         aLabel:PIECE_LABEL[A.p.type]||A.p.type,
         bLabel:PIECE_LABEL[B.p.type]||B.p.type,
         gridCells,
-        outputGlyph:pieceGlyph({type:info.result,color:myColor})
+        outputGlyph:info.result==="reload"?pieceGlyph({type:"turret",color:myColor}):pieceGlyph({type:info.result,color:myColor})
       });
     }
   }
@@ -302,6 +307,10 @@ function showPromotion(){
  * 대신 drawBoard()에서 칸에 attr-fire(붉은 테두리)/attr-cold(푸른 테두리)
  * 클래스를 붙여 겉모습으로 구분한다.
  */
+/*
+ * 화/냉 속성은 칸이 아니라 기물 자체의 테두리(outline)로 표시한다
+ * (piece-fire / piece-cold, drawBoard()의 el에 부착).
+ */
 const ATTR_ICON={armored:"🛡",piercing:"⚔"};
 
 function drawBoard(){
@@ -324,6 +333,15 @@ function drawBoard(){
       const el=document.createElement("span");
       el.className=p.color==="white"?"white-piece":"black-piece";
       if(p.type==="pawn"&&p.gun)el.className+=" gun-pawn";
+      /*
+       * 야생마/기마병/네크로맨서는 심볼이 나이트·비숍과 겹치므로
+       * 색깔 글로우 + 배지 글자로 구별한다.
+       */
+      if(p.type==="wildHorse")el.classList.add("wildhorse");
+      if(p.type==="necromancer")el.classList.add("necromancer");
+      if(p.type==="cavalry")el.classList.add("cavalry");
+      if(p.attributes?.fire)el.classList.add("piece-fire");
+      if(p.attributes?.cold)el.classList.add("piece-cold");
       el.textContent=pieceGlyph(p);
 
       if(p.type==="turret"){
@@ -351,8 +369,6 @@ function drawBoard(){
           lifeTag.textContent="♥"+p.lives;
           s.appendChild(lifeTag);
         }
-        if(p.attributes.fire)s.classList.add("attr-fire");
-        if(p.attributes.cold)s.classList.add("attr-cold");
       }
     }
 
