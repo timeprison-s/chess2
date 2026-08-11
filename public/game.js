@@ -115,6 +115,23 @@ function combinable(a,b){
 const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",queen:"퀸",king:"킹"};
 
 /*
+ * 연성 결과 판정. server.js의 forge 액션 판정 로직과 반드시 동일하게 유지한다.
+ * (버그: 이 함수가 없어서 getForgeCandidates() 호출 시 예외가 발생 -> 연성대 버튼이
+ * 계속 hidden 상태로 남아있었다.)
+ */
+const RESULT_LABEL={wildHorse:"야생마",necromancer:"네크로맨서",tank:"전차",turret:"포탑",cavalry:"기마병"};
+function combineResultInfo(a,b){
+  let result=null;
+  if(a.type==="knight"&&b.type==="knight")result="wildHorse";
+  else if(a.type==="bishop"&&b.type==="bishop")result="necromancer";
+  else if(a.type==="rook"&&b.type==="rook")result="tank";
+  else if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))result="turret";
+  else if((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))result="cavalry";
+  if(!result)return null;
+  return {result,label:RESULT_LABEL[result]};
+}
+
+/*
  * 기물 표시 글자(유니코드). 실제 보드 기물(symbol 보유)과
  * 연성대 미리보기용 가상 기물(symbol 없음) 모두에 사용한다.
  */
