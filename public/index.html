@@ -62,14 +62,22 @@
         <div class="game-layout">
 
             <div class="left-panel">
-                <button id="forgeButton" class="hidden" title="연성대 (기물 합성)">
-                    <span class="forge-btn-grid">
-                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
-                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
-                        <span class="forge-btn-cell"></span><span class="forge-btn-cell"></span><span class="forge-btn-cell"></span>
-                    </span>
-                    <span class="forge-btn-label">연성대</span>
-                </button>
+                <div id="forgePanel" class="forge-panel">
+                    <div class="forge-panel-title">연성대</div>
+
+                    <div class="forge-table">
+                        <div id="forgeGrid" class="forge-grid"></div>
+                        <div class="forge-arrow-down">▼</div>
+                        <div id="forgeOutputSlot" class="forge-cell forge-output">
+                            <span class="forge-slot-label">결과</span>
+                        </div>
+                    </div>
+
+                    <div id="forgeResultInfo" class="craft-info"></div>
+
+                    <button id="forgeConfirm" class="hidden">연성하기</button>
+                    <button id="forgeReset">초기화</button>
+                </div>
             </div>
 
             <div class="board-container">
@@ -148,27 +156,7 @@
         </div>
     </div>
 
-    <div id="forgeModal" class="promotion-modal hidden">
-        <div class="promotion-box forge-box">
-            <h2>연성대</h2>
-            <p>기물 2개를 드래그해서 위 칸에 올리세요 (또는 클릭)</p>
-
-            <div class="forge-table">
-                <div id="forgeGrid" class="forge-grid"></div>
-                <div class="forge-arrow-down">▼</div>
-                <div id="forgeOutputSlot" class="forge-cell forge-output">
-                    <span class="forge-slot-label">결과</span>
-                </div>
-            </div>
-
-            <div id="forgeResultInfo" class="craft-info"></div>
-
-            <button id="forgeConfirm" class="hidden">연성하기</button>
-            <button id="forgeCancel" class="forge-cancel">닫기</button>
-        </div>
-    </div>
-
-    <script src="/game.js?v=10"></script>
+    <script src="/game.js?v=11"></script>
 
 </body>
 </html>

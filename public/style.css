@@ -570,14 +570,15 @@ body {
 }
 
 .left-panel {
-    width: 140px;
+    width: 220px;
     flex-shrink: 0;
 
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
 
-    padding-top: 280px;
+    height: 640px;
 }
 
 .board-container {
@@ -1056,8 +1057,36 @@ body {
    연성대: 3x3 드래그 그리드 (요청 이미지와 동일한 레이아웃:
    3x3 재료 그리드 -> 화살표 -> 결과 1칸)
 ========================= */
-.forge-box{
-    min-width: 300px;
+.forge-panel{
+    width: 100%;
+    padding: 14px;
+
+    background: #242424;
+    border: 1px solid #3a3a3a;
+    border-radius: 10px;
+
+    text-align: center;
+}
+
+.forge-panel-title{
+    font-weight: bold;
+    color: #ccc;
+    margin-bottom: 10px;
+}
+
+#forgeReset{
+    width: 100%;
+    padding: 8px;
+    border: 0;
+    border-radius: 6px;
+    background: #444;
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+#forgeReset:hover{
+    background: #555;
 }
 
 .forge-table{
@@ -1065,13 +1094,13 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
 }
 
 .forge-grid{
     display: grid;
-    grid-template-columns: repeat(3, 60px);
-    grid-template-rows: repeat(3, 60px);
+    grid-template-columns: repeat(3, 50px);
+    grid-template-rows: repeat(3, 50px);
     gap: 4px;
 
     padding: 8px;
@@ -1081,8 +1110,8 @@ body {
 }
 
 .forge-cell{
-    width: 60px;
-    height: 60px;
+    width: 50px;
+    height: 50px;
 
     display: flex;
     align-items: center;
@@ -1092,7 +1121,7 @@ body {
     border: 1px solid #555;
     border-radius: 6px;
 
-    font-size: 32px;
+    font-size: 26px;
 
     cursor: pointer;
 }
@@ -1119,8 +1148,8 @@ body {
 }
 
 .forge-cell.forge-output{
-    width: 70px;
-    height: 70px;
+    width: 56px;
+    height: 56px;
     cursor: default;
     background: #1c1c1c;
     border: 2px dashed #666;
