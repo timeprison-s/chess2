@@ -1,4 +1,4 @@
-let socket=null,myColor=null,roomCode=null,boardState=null,currentTurn="white",selected=null,gameEnded=false,moves=[],time={white:600,black:600},score={white:0,black:0},moveCount=0,colossusReady={white:false,black:false},colossusSacrificeReady={white:false,black:false},singularities=[];
+let socket=null,myColor=null,roomCode=null,boardState=null,control=null,pendingForge={white:null,black:null},currentTurn="white",selected=null,gameEnded=false,moves=[],time={white:600,black:600},score={white:0,black:0},moveCount=0,colossusReady={white:false,black:false},colossusSacrificeReady={white:false,black:false},singularities=[];
 let lastStateAt=Date.now(), localTimer=null;
 
 function connect(){
@@ -20,11 +20,13 @@ function connect(){
     }
     if(m.type==="state"){
       lastStateAt=Date.now();
-      boardState=m.board;currentTurn=m.currentTurn;moves=m.moves;time=m.time;gameEnded=m.gameEnded;
+      boardState=m.board;control=m.control;pendingForge=m.pendingForge||{white:null,black:null};
+      currentTurn=m.currentTurn;moves=m.moves;time=m.time;gameEnded=m.gameEnded;
       score=m.score;moveCount=m.moveCount;colossusReady=m.colossusReady;
       colossusSacrificeReady=m.colossusSacrificeReady||{white:false,black:false};
       singularities=m.singularities||[];
-      drawBoard();renderMoves();updateUI();
+      if(pendingForge?.[myColor])selected=null;
+      drawBoard();renderMoves();updateUI();updateForgePlacementBanner();
     }
     if(m.type==="error"){alert(m.message); selected=null; drawBoard()}
   };
@@ -248,7 +250,8 @@ function pieceGlyph(p){
 
 /*
  * 연성대: 이제 거리 제한이 없다. 아군 기물이면 보드 어디에 있든
- * 드래그(또는 클릭)해서 재료 슬롯 2칸에 올리면 연성할 수 있다.
+ * 드래그(또는 클릭)해서 3*3 그리드 칸에 올리면 연성할 수 있다.
+ * 제작 자체는 턴을 쓰지 않는다 - 완성된 기물을 보드에 배치할 때만 턴을 쓴다.
  */
 function hasAnyCombinablePair(){
   const pieces=[];
@@ -261,50 +264,54 @@ function hasAnyCombinablePair(){
   return false;
 }
 
-/*
- * 두 재료 좌표로부터 최종 소환 위치를 계산한다.
- * (서버 로직과 반드시 동일하게 유지: 포탑=룩 자리, 기마병=폰 자리,
- *  포탑 재장전=포탑 자리, 그 외=두 좌표 중간지점 반올림)
- */
-function computeForgeFinalPos(A,B,result){
-  let finalR=Math.round((A.r+B.r)/2),finalC=Math.round((A.c+B.c)/2);
-  if(result==="turret"){
-    const rookAt=A.p.type==="rook"?A:B;
-    finalR=rookAt.r;finalC=rookAt.c;
-  } else if(result==="cavalry"){
-    const pawnAt=A.p.type==="pawn"?A:B;
-    finalR=pawnAt.r;finalC=pawnAt.c;
-  } else if(result==="reload"){
-    const turretAt=A.p.type==="turret"?A:B;
-    finalR=turretAt.r;finalC=turretAt.c;
-  }
-  return {finalR,finalC};
-}
-
 let forgeModalOpen=false;
-let forgeSlots={A:null,B:null}; // 각각 null 또는 {r,c}
+let forgeCells=new Array(9).fill(null); // 각각 null 또는 {r,c}
 let draggedFrom=null; // 드래그 중인 기물의 {r,c}
 
-function forgeSlotPiece(slot){
-  const pos=forgeSlots[slot];
-  return pos?boardState[pos.r]?.[pos.c]:null;
+function forgeFilledCells(){
+  return forgeCells
+    .map((pos,i)=>pos?{i,r:pos.r,c:pos.c,p:boardState[pos.r]?.[pos.c]}:null)
+    .filter(x=>x&&x.p);
 }
 
-function renderForgeSlot(slot){
-  const el=document.getElementById(slot==="A"?"forgeSlotA":"forgeSlotB");
-  const p=forgeSlotPiece(slot);
-  el.innerHTML="";
-  el.classList.toggle("filled",!!p);
-  if(p){
-    const glyph=document.createElement("span");
-    glyph.className=p.color==="white"?"white-piece":"black-piece";
-    glyph.textContent=pieceGlyph(p);
-    el.appendChild(glyph);
-  } else {
-    const label=document.createElement("span");
-    label.className="forge-slot-label";
-    label.textContent=slot==="A"?"재료 1":"재료 2";
-    el.appendChild(label);
+function renderForgeGrid(){
+  const grid=document.getElementById("forgeGrid");
+  grid.innerHTML="";
+  for(let i=0;i<9;i++){
+    const cellEl=document.createElement("div");
+    cellEl.className="forge-cell";
+    cellEl.dataset.index=i;
+
+    const pos=forgeCells[i];
+    const p=pos?boardState[pos.r]?.[pos.c]:null;
+
+    if(p){
+      cellEl.classList.add("filled");
+      const glyph=document.createElement("span");
+      glyph.className=p.color==="white"?"white-piece":"black-piece";
+      glyph.textContent=pieceGlyph(p);
+      cellEl.appendChild(glyph);
+    }
+
+    cellEl.addEventListener("click",()=>{
+      if(forgeCells[i]){forgeCells[i]=null;renderForge()}
+    });
+
+    cellEl.addEventListener("dragover",e=>{e.preventDefault();cellEl.classList.add("drag-over")});
+    cellEl.addEventListener("dragleave",()=>cellEl.classList.remove("drag-over"));
+    cellEl.addEventListener("drop",e=>{
+      e.preventDefault();
+      cellEl.classList.remove("drag-over");
+      if(!draggedFrom)return;
+      /* 같은 기물을 두 칸에 중복으로 놓지 못하게 함 */
+      const dup=forgeCells.findIndex(pos=>pos&&pos.r===draggedFrom.r&&pos.c===draggedFrom.c);
+      if(dup!==-1)forgeCells[dup]=null;
+      forgeCells[i]=draggedFrom;
+      draggedFrom=null;
+      renderForge();
+    });
+
+    grid.appendChild(cellEl);
   }
 }
 
@@ -316,9 +323,9 @@ function renderForgeOutput(){
   outEl.innerHTML="";
   outEl.classList.remove("ready","invalid");
 
-  const pa=forgeSlotPiece("A"),pb=forgeSlotPiece("B");
+  const filled=forgeFilledCells();
 
-  if(!pa||!pb){
+  if(filled.length===0){
     const label=document.createElement("span");
     label.className="forge-slot-label";
     label.textContent="결과";
@@ -328,31 +335,19 @@ function renderForgeOutput(){
     return;
   }
 
-  if(forgeSlots.A.r===forgeSlots.B.r&&forgeSlots.A.c===forgeSlots.B.c){
+  if(filled.length!==2){
     outEl.classList.add("invalid");
-    infoEl.textContent="같은 기물을 두 번 놓을 수 없습니다.";
+    infoEl.textContent="재료는 정확히 2개를 놓아야 합니다.";
     confirmBtn.classList.add("hidden");
     return;
   }
 
-  const info=combinable(pa,pb)?combineResultInfo(pa,pb):null;
+  const [A,B]=filled;
+  const info=combinable(A.p,B.p)?combineResultInfo(A.p,B.p):null;
 
   if(!info){
     outEl.classList.add("invalid");
     infoEl.textContent="이 두 기물은 연성할 수 없습니다.";
-    confirmBtn.classList.add("hidden");
-    return;
-  }
-
-  const A={r:forgeSlots.A.r,c:forgeSlots.A.c,p:pa};
-  const B={r:forgeSlots.B.r,c:forgeSlots.B.c,p:pb};
-  const {finalR,finalC}=computeForgeFinalPos(A,B,info.result);
-  const occupant=boardState[finalR]?.[finalC];
-  const blocked=occupant&&!(finalR===A.r&&finalC===A.c)&&!(finalR===B.r&&finalC===B.c);
-
-  if(blocked){
-    outEl.classList.add("invalid");
-    infoEl.textContent=`소환 위치(${squareName(finalR,finalC)})에 다른 기물이 있어 연성할 수 없습니다.`;
     confirmBtn.classList.add("hidden");
     return;
   }
@@ -363,42 +358,36 @@ function renderForgeOutput(){
   glyph.textContent=info.result==="reload"?pieceGlyph({type:"turret",color:myColor}):pieceGlyph({type:info.result,color:myColor});
   outEl.appendChild(glyph);
 
-  infoEl.textContent=`${PIECE_LABEL[pa.type]||pa.type}(${squareName(forgeSlots.A.r,forgeSlots.A.c)}) + ${PIECE_LABEL[pb.type]||pb.type}(${squareName(forgeSlots.B.r,forgeSlots.B.c)}) → ${info.label}`;
+  const tail=info.result==="reload"?"(제자리에서 즉시 적용, 턴 소모)":"(만든 뒤 지배하는 빈 칸에 배치, 배치 시 턴 소모)";
+  infoEl.textContent=`${PIECE_LABEL[A.p.type]||A.p.type}(${squareName(A.r,A.c)}) + ${PIECE_LABEL[B.p.type]||B.p.type}(${squareName(B.r,B.c)}) → ${info.label} ${tail}`;
   confirmBtn.classList.remove("hidden");
 }
 
 function renderForge(){
-  renderForgeSlot("A");
-  renderForgeSlot("B");
+  renderForgeGrid();
   renderForgeOutput();
 }
 
 /*
- * 슬롯에 기물을 배정한다. 드래그로 놓든, 클릭으로 놓든 이 함수를 거친다.
- * 빈 슬롯이 있으면 그쪽에 채우고, 둘 다 차있으면 재료1을 덮어쓴다.
+ * 그리드에 기물을 배정한다. 드래그로 놓든, 클릭으로 놓든 이 함수를 거친다
+ * (클릭은 드래그가 불편할 때의 대체 수단 - 비어있는 첫 칸에 채운다).
  */
 function assignForgeSlot(r,c){
   const p=boardState[r]?.[c];
   if(!p||p.color!==myColor)return;
 
-  if(!forgeSlots.A){
-    forgeSlots.A={r,c};
-  } else if(!forgeSlots.B){
-    forgeSlots.B={r,c};
-  } else {
-    forgeSlots.A={r,c};
-    forgeSlots.B=null;
-  }
-  renderForge();
-}
+  const dup=forgeCells.findIndex(pos=>pos&&pos.r===r&&pos.c===c);
+  if(dup!==-1){forgeCells[dup]=null;renderForge();return}
 
-function clearForgeSlot(slot){
-  forgeSlots[slot]=null;
+  const emptyIndex=forgeCells.findIndex(pos=>!pos);
+  if(emptyIndex===-1)return;
+
+  forgeCells[emptyIndex]={r,c};
   renderForge();
 }
 
 function openForgeModal(){
-  forgeSlots={A:null,B:null};
+  forgeCells=new Array(9).fill(null);
   forgeModalOpen=true;
   renderForge();
   document.getElementById("forgeModal").classList.remove("hidden");
@@ -406,35 +395,42 @@ function openForgeModal(){
 
 function closeForgeModal(){
   forgeModalOpen=false;
-  forgeSlots={A:null,B:null};
+  forgeCells=new Array(9).fill(null);
   document.getElementById("forgeModal").classList.add("hidden");
 }
 
 document.getElementById("forgeButton").addEventListener("click",openForgeModal);
 document.getElementById("forgeCancel").addEventListener("click",closeForgeModal);
 
-document.getElementById("forgeSlotA").addEventListener("click",()=>{if(forgeSlots.A)clearForgeSlot("A")});
-document.getElementById("forgeSlotB").addEventListener("click",()=>{if(forgeSlots.B)clearForgeSlot("B")});
+document.getElementById("forgeConfirm").addEventListener("click",()=>{
+  const filled=forgeFilledCells();
+  if(filled.length!==2)return;
+  const [A,B]=filled;
+  sendAction({type:"forge",fr:A.r,fc:A.c,tr:B.r,tc:B.c});
+  closeForgeModal();
+});
 
-for(const slotName of ["A","B"]){
-  const el=document.getElementById(slotName==="A"?"forgeSlotA":"forgeSlotB");
-  el.addEventListener("dragover",e=>{e.preventDefault();el.classList.add("drag-over")});
-  el.addEventListener("dragleave",()=>el.classList.remove("drag-over"));
-  el.addEventListener("drop",e=>{
-    e.preventDefault();
-    el.classList.remove("drag-over");
-    if(!draggedFrom)return;
-    forgeSlots[slotName]=draggedFrom;
-    draggedFrom=null;
-    renderForge();
-  });
+/*
+ * 연성 기물 배치 모드: 서버가 pendingForge를 보내오면(연성 완료, 배치 대기)
+ * 배너를 보여주고, 보드에서 지배하는 빈 칸을 클릭하면 배치(턴 소모)한다.
+ */
+function updateForgePlacementBanner(){
+  const banner=document.getElementById("forgePlacementBanner");
+  const pending=pendingForge?.[myColor];
+
+  if(!pending){
+    banner.classList.add("hidden");
+    return;
+  }
+
+  banner.classList.remove("hidden");
+  const glyphEl=document.getElementById("forgePendingGlyph");
+  glyphEl.className=myColor==="white"?"white-piece forge-pending-glyph":"black-piece forge-pending-glyph";
+  glyphEl.textContent=pieceGlyph(pending.piece);
 }
 
-document.getElementById("forgeConfirm").addEventListener("click",()=>{
-  const pa=forgeSlotPiece("A"),pb=forgeSlotPiece("B");
-  if(!pa||!pb)return;
-  sendAction({type:"forge",fr:forgeSlots.A.r,fc:forgeSlots.A.c,tr:forgeSlots.B.r,tc:forgeSlots.B.c});
-  closeForgeModal();
+document.getElementById("forgePlacementCancel").addEventListener("click",()=>{
+  sendAction({type:"cancelForge"});
 });
 
 
@@ -501,6 +497,14 @@ function drawBoard(){
     const s=document.createElement("div");
     s.className="square "+((r+c)%2===0?"light":"dark");
     const p=boardState[r][c];
+
+    const ctrl=control?.[r]?.[c];
+    if(ctrl==="white")s.classList.add("control-white");
+    if(ctrl==="black")s.classList.add("control-black");
+
+    if(pendingForge?.[myColor]&&!p&&ctrl===myColor){
+      s.classList.add("placeable");
+    }
 
     if(p){
       const el=document.createElement("span");
@@ -583,6 +587,17 @@ async function handleSquareClick(r,c){
    */
   if(forgeModalOpen){
     assignForgeSlot(r,c);
+    return;
+  }
+
+  /*
+   * 배치를 기다리는 연성 기물이 있으면, 보드 클릭은 오직
+   * (지배하는 빈 칸에) 배치하는 동작으로만 취급된다.
+   */
+  if(pendingForge?.[myColor]){
+    if(!boardState[r][c]&&control?.[r]?.[c]===myColor){
+      sendAction({type:"placeForged",r,c});
+    }
     return;
   }
 
@@ -687,7 +702,7 @@ function updateUI(){
   const colossusAvailable=(colossusReady[myColor]||colossusSacrificeReady[myColor]);
   document.getElementById("colossusButton").classList.toggle("hidden",!colossusAvailable||currentTurn!==myColor||gameEnded);
 
-  const forgeAvailable=currentTurn===myColor&&!gameEnded&&boardState&&!forgeModalOpen&&hasAnyCombinablePair();
+  const forgeAvailable=currentTurn===myColor&&!gameEnded&&boardState&&!forgeModalOpen&&!pendingForge?.[myColor]&&hasAnyCombinablePair();
   document.getElementById("forgeButton").classList.toggle("hidden",!forgeAvailable);
 }
 

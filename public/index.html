@@ -108,6 +108,15 @@
 
                 <div id="moveCounter">전체 수: 0</div>
 
+                <div id="forgePlacementBanner" class="hidden">
+                    <div class="forge-placement-row">
+                        <span>배치할 기물:</span>
+                        <span id="forgePendingGlyph" class="forge-pending-glyph"></span>
+                    </div>
+                    <div class="forge-placement-hint">지배하는 빈 칸을 클릭해 배치하세요.</div>
+                    <button id="forgePlacementCancel">연성 취소</button>
+                </div>
+
                 <button id="colossusButton" class="hidden">거신병 소환</button>
 
                 <button id="restartButton">
@@ -140,29 +149,26 @@
     </div>
 
     <div id="forgeModal" class="promotion-modal hidden">
-        <div class="promotion-box">
+        <div class="promotion-box forge-box">
             <h2>연성대</h2>
-            <p>기물을 드래그해서 아래 칸에 올리세요 (또는 클릭해서 놓기)</p>
-            <div class="forge-slots">
-                <div id="forgeSlotA" class="forge-slot">
-                    <span class="forge-slot-label">재료 1</span>
-                </div>
-                <div class="forge-plus">+</div>
-                <div id="forgeSlotB" class="forge-slot">
-                    <span class="forge-slot-label">재료 2</span>
-                </div>
-                <div class="craft-arrow">→</div>
-                <div id="forgeOutputSlot" class="forge-slot forge-output">
+            <p>기물 2개를 드래그해서 위 칸에 올리세요 (또는 클릭)</p>
+
+            <div class="forge-table">
+                <div id="forgeGrid" class="forge-grid"></div>
+                <div class="forge-arrow-down">▼</div>
+                <div id="forgeOutputSlot" class="forge-cell forge-output">
                     <span class="forge-slot-label">결과</span>
                 </div>
             </div>
+
             <div id="forgeResultInfo" class="craft-info"></div>
+
             <button id="forgeConfirm" class="hidden">연성하기</button>
-            <button id="forgeCancel" class="forge-cancel">취소</button>
+            <button id="forgeCancel" class="forge-cancel">닫기</button>
         </div>
     </div>
 
-    <script src="/game.js?v=9"></script>
+    <script src="/game.js?v=10"></script>
 
 </body>
 </html>

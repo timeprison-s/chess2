@@ -151,6 +151,12 @@ function makeRoom(code, password, name) {
         name: name || code,
         password: password || null,
         board: initialBoard(),
+        control: initialControl(),
+
+        pendingForge: {
+            white: null,
+            black: null
+        },
 
         players: {
             white: null,
@@ -230,6 +236,29 @@ function pieceValue(p) {
 
 function inside(r,c) {
     return r >= 0 && r < 8 && c >= 0 && c < 8;
+}
+
+/*
+ * 칸 지배권.
+ *
+ * 시작 시 1~4랭크(백 진영, row4~7)는 백이, 5~8랭크(흑 진영, row0~3)는
+ * 흑이 지배한다. 이후 어떤 기물이든 그 칸에 새로 "발을 디디면"
+ * (이동/캐슬링/부활/거신병 소환/연성 기물 배치/전차가 지나간 경로)
+ * 그 즉시 지배권이 그 기물의 팀으로 바뀐다. 한 번 지배한 칸은
+ * 그 위의 기물이 사라지거나 이동해 나가도 다른 팀이 다시 밟기
+ * 전까지는 계속 지배 상태가 유지된다.
+ */
+function initialControl() {
+    const control = [];
+    for (let r = 0; r < 8; r++) {
+        control.push(new Array(8).fill(r <= 3 ? "black" : "white"));
+    }
+    return control;
+}
+
+function setControl(room, r, c, color) {
+    if (!inside(r,c)) return;
+    room.control[r][c] = color;
 }
 
 function clearPath(board, fr, fc, tr, tc) {
@@ -446,7 +475,7 @@ function colossusBlast(room, cr, cc, attackerAttrs) {
     }
 }
 
-function tankRampage(room, fr, fc, tr, tc, attackerAttrs) {
+function tankRampage(room, fr, fc, tr, tc, attackerAttrs, color) {
     const horizontal = fr === tr;
     const dr = Math.sign(tr - fr);
     const dc = Math.sign(tc - fc);
@@ -465,6 +494,7 @@ function tankRampage(room, fr, fc, tr, tc, attackerAttrs) {
 
     for (const [pr,pc] of cells) {
         if (room.board[pr][pc]) damageOrKill(room, pr, pc, attackerAttrs);
+        if (color) setControl(room, pr, pc, color);
 
         if (horizontal) {
             if (inside(pr-1,pc) && room.board[pr-1][pc]) damageOrKill(room, pr-1, pc, attackerAttrs);
@@ -639,6 +669,8 @@ function broadcast(room) {
     const data = JSON.stringify({
         type: "state",
         board: room.board,
+        control: room.control,
+        pendingForge: room.pendingForge,
         currentTurn: room.currentTurn,
         moves: room.moves,
         time: room.time,
@@ -762,6 +794,8 @@ function handleAction(room, ws, action) {
         const fresh = makeRoom(room.code);
 
         room.board = fresh.board;
+        room.control = fresh.control;
+        room.pendingForge = fresh.pendingForge;
         room.currentTurn = fresh.currentTurn;
         room.extraTurns = fresh.extraTurns;
         room.frozenTurns = fresh.frozenTurns;
@@ -792,6 +826,15 @@ function handleAction(room, ws, action) {
         room.frozenTurns[playerColor] > 0
     ) {
         sendError(ws,"킹이 잡혀 현재 움직일 수 없습니다.");
+        return;
+    }
+
+    if (
+        room.pendingForge[playerColor] &&
+        action.type !== "placeForged" &&
+        action.type !== "cancelForge"
+    ) {
+        sendError(ws,"먼저 연성한 기물을 배치하거나 취소하세요.");
         return;
     }
 
@@ -826,11 +869,13 @@ function handleAction(room, ws, action) {
             room.board[tr][tc] = p;
             room.board[fr][fc] = null;
             p.hasMoved = true;
+            setControl(room, tr, tc, playerColor);
 
             const rook = room.board[info.rookFrom.r][info.rookFrom.c];
             room.board[info.rookTo.r][info.rookTo.c] = rook;
             room.board[info.rookFrom.r][info.rookFrom.c] = null;
             if (rook) rook.hasMoved = true;
+            setControl(room, info.rookTo.r, info.rookTo.c, playerColor);
 
             addMove(room, tc > fc ? "O-O" : "O-O-O");
 
@@ -856,7 +901,7 @@ function handleAction(room, ws, action) {
          * 1회성으로 자폭한다.
          */
         if (p.type === "tank") {
-            tankRampage(room, fr, fc, tr, tc, p.attributes);
+            tankRampage(room, fr, fc, tr, tc, p.attributes, playerColor);
             room.board[fr][fc] = null;
             room.board[tr][tc] = null;
 
@@ -947,6 +992,8 @@ function handleAction(room, ws, action) {
         if (target &&
             (p.type === "wildHorse" || target.type === "wildHorse")) {
 
+            setControl(room, tr, tc, playerColor);
+
             p.deathRow = fr;
             p.deathCol = fc;
 
@@ -989,6 +1036,8 @@ function handleAction(room, ws, action) {
             room.board[tr][tc] = p;
             room.board[fr][fc] = null;
         }
+
+        setControl(room, tr, tc, playerColor);
 
         /*
          * 거신병: 이동 시 목적지 중심 5x5 칸의 모든 기물을 죽인다.
@@ -1221,6 +1270,8 @@ function handleAction(room, ws, action) {
          *
          * 포탑 + 폰을 연성하면 새 기물을 만들지 않고 포탑의 탄약만 1 늘린다
          * (최대치까지). 폰은 소모되고 포탑은 제자리에 그대로 남는다.
+         * 새 기물이 나오는 게 아니라 즉시 효과이므로, 배치 단계 없이
+         * 바로 턴을 소모한다.
          * 폰이 화/냉 속성을 갖고 있었다면 포탑도 그 속성을 이어받는다.
          */
         const turretPiece = a.type === "turret" ? a : (b.type === "turret" ? b : null);
@@ -1308,72 +1359,104 @@ function handleAction(room, ws, action) {
             return;
         }
 
-        /*
-         * 포탑: 룩이 있던 자리에서 소환된다.
-         * 기마병: 나이트가 있던 자리에서 소환된다(기존 규칙 유지).
-         * 그 외: 3*3 영역의 가운데(두 좌표 중간지점, 반올림)에서 소환된다.
-         */
-
-        let finalR = Math.round((action.fr + action.tr) / 2);
-        let finalC = Math.round((action.fc + action.tc) / 2);
-
-        const fromR = action.fr;
-        const fromC = action.fc;
-
-        if (result === "turret") {
-            const rookAt = a.type === "rook"
-                ? { r: action.fr, c: action.fc }
-                : { r: action.tr, c: action.tc };
-
-            finalR = rookAt.r;
-            finalC = rookAt.c;
-        }
-
-        else if (result === "cavalry") {
-            const pawnAt = a.type === "pawn"
-                ? { r: action.fr, c: action.fc }
-                : { r: action.tr, c: action.tc };
-
-            finalR = pawnAt.r;
-            finalC = pawnAt.c;
-        }
-
-        const occupant = room.board[finalR][finalC];
-
-        if (
-            occupant &&
-            !(finalR === action.fr && finalC === action.fc) &&
-            !(finalR === action.tr && finalC === action.tc)
-        ) {
-            sendError(ws,"연성 위치에 다른 기물이 있습니다.");
-            return;
-        }
-
-        room.board[action.fr][action.fc] = null;
-        room.board[action.tr][action.tc] = null;
-
         const symbols = {
             wildHorse: playerColor === "white" ? "♘" : "♞",
             necromancer: playerColor === "white" ? "♗" : "♝",
             turret: playerColor === "white" ? "♖" : "♜",
             cavalry: playerColor === "white" ? "♘" : "♞",
-            tank: playerColor === "white" ? "▣" : "▣"
+            tank: "▣"
         };
 
-        room.board[finalR][finalC] =
-            createPiece(
-                result,
-                playerColor,
-                symbols[result]
-            );
+        const craftedPiece = createPiece(
+            result,
+            playerColor,
+            symbols[result]
+        );
 
         /*
          * 화/냉 속성 상속: 연성에 사용된 두 기물 중 하나라도 화/냉 속성을
          * 갖고 있었다면, 새로 만들어진 기물도 그 속성을 갖게 된다.
          */
-        const newPiece = room.board[finalR][finalC];
-        if (a.attributes.fire || b.attributes.fire) newPiece.attributes.fire = true;
-        if (a.attributes.cold || b.attributes.cold) newPiece.attributes.cold = true;
+        if (a.attributes.fire || b.attributes.fire) craftedPiece.attributes.fire = true;
+        if (a.attributes.cold || b.attributes.cold) craftedPiece.attributes.cold = true;
+
+        /*
+         * 제작 자체는 턴을 소모하지 않는다.
+         * 재료 두 기물은 즉시 판 위에서 사라지고, 완성된 기물은
+         * "배치를 기다리는" 상태로 보관된다. 이 상태에서는 배치(placeForged)나
+         * 취소(cancelForge) 외의 다른 행동을 할 수 없다 (위 가드에서 처리).
+         */
+        room.board[action.fr][action.fc] = null;
+        room.board[action.tr][action.tc] = null;
+
+        room.pendingForge[playerColor] = {
+            piece: craftedPiece,
+            sourceA: { r: action.fr, c: action.fc, piece: a },
+            sourceB: { r: action.tr, c: action.tc, piece: b }
+        };
+
+        broadcast(room);
+
+        return;
+    }
+
+    /*
+     * 연성 취소: 배치하기 전이라면 재료 두 기물을 원래 자리로 되돌린다.
+     * 턴을 소모하지 않는다.
+     */
+    if (action.type === "cancelForge") {
+
+        const pending = room.pendingForge[playerColor];
+
+        if (!pending) {
+            sendError(ws,"취소할 연성이 없습니다.");
+            return;
+        }
+
+        room.board[pending.sourceA.r][pending.sourceA.c] = pending.sourceA.piece;
+        room.board[pending.sourceB.r][pending.sourceB.c] = pending.sourceB.piece;
+
+        room.pendingForge[playerColor] = null;
+
+        broadcast(room);
+
+        return;
+    }
+
+    /*
+     * 연성 기물 배치: 자신이 지배하는 빈 칸에만 배치할 수 있다.
+     * 배치는 턴을 소모한다.
+     */
+    if (action.type === "placeForged") {
+
+        const pending = room.pendingForge[playerColor];
+
+        if (!pending) {
+            sendError(ws,"배치할 기물이 없습니다.");
+            return;
+        }
+
+        const { r, c } = action;
+
+        if (!inside(r,c)) {
+            sendError(ws,"칸 위치가 잘못되었습니다.");
+            return;
+        }
+
+        if (room.board[r][c]) {
+            sendError(ws,"그 칸에는 이미 기물이 있습니다.");
+            return;
+        }
+
+        if (room.control[r][c] !== playerColor) {
+            sendError(ws,"자신이 지배하는 칸에만 배치할 수 있습니다.");
+            return;
+        }
+
+        room.board[r][c] = pending.piece;
+        setControl(room, r, c, playerColor);
+
+        room.pendingForge[playerColor] = null;
 
         const codes = {
             wildHorse: "W",
@@ -1385,19 +1468,13 @@ function handleAction(room, ws, action) {
 
         addMove(
             room,
-            squareName(
-                fromR,
-                fromC
-            ) +
             "[" +
-            codes[result] +
+            codes[pending.piece.type] +
             "]" +
-            squareName(
-                finalR,
-                finalC
-            )
+            squareName(r,c)
         );
 
+        finishIfNeeded(room);
         advanceTurn(room);
         broadcast(room);
 
@@ -1557,6 +1634,8 @@ function handleAction(room, ws, action) {
         room.board[action.tr][action.tc] =
             revived;
 
+        setControl(room, action.tr, action.tc, playerColor);
+
         addMove(
             room,
             "N+" +
@@ -1629,6 +1708,8 @@ function handleAction(room, ws, action) {
             playerColor,
             playerColor === "white" ? "♔" : "♚"
         );
+
+        setControl(room, r, c, playerColor);
 
         addMove(
             room,
