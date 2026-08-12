@@ -1185,6 +1185,10 @@ body {
 
 .piece-draggable{
     cursor: grab;
+    -webkit-user-drag: element;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
 }
 
 /* =========================
