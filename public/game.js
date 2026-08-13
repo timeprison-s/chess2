@@ -1,4 +1,4 @@
-let socket=null,myColor=null,roomCode=null,boardState=null,control=null,pendingForge={white:null,black:null},currentTurn="white",selected=null,gameEnded=false,moves=[],time={white:600,black:600},score={white:0,black:0},moveCount=0,colossusReady={white:false,black:false},colossusSacrificeReady={white:false,black:false},singularities=[];
+let socket=null,myColor=null,roomCode=null,boardState=null,control=null,seaState={},pendingForge={white:null,black:null},currentTurn="white",selected=null,gameEnded=false,moves=[],time={white:600,black:600},score={white:0,black:0},moveCount=0,colossusReady={white:false,black:false},colossusSacrificeReady={white:false,black:false},singularities=[];
 let lastStateAt=Date.now(), localTimer=null;
 
 function connect(){
@@ -20,7 +20,7 @@ function connect(){
     }
     if(m.type==="state"){
       lastStateAt=Date.now();
-      boardState=m.board;control=m.control;pendingForge=m.pendingForge||{white:null,black:null};
+      boardState=m.board;control=m.control;seaState=m.sea||{};pendingForge=m.pendingForge||{white:null,black:null};
       currentTurn=m.currentTurn;moves=m.moves;time=m.time;gameEnded=m.gameEnded;
       score=m.score;moveCount=m.moveCount;colossusReady=m.colossusReady;
       colossusSacrificeReady=m.colossusSacrificeReady||{white:false,black:false};
@@ -138,6 +138,7 @@ function sendAction(action){if(socket?.readyState===WebSocket.OPEN)socket.send(J
 
 function inside(r,c){return r>=0&&r<8&&c>=0&&c<8}
 function squareName(r,c){return "abcdefgh"[c]+(8-r)}
+function squareLabel(r,c){return isSeaSquare(r,c)?`바다(${r},${c})`:squareName(r,c)}
 function chebyshev(r1,c1,r2,c2){return Math.max(Math.abs(r1-r2),Math.abs(c1-c2))}
 function clearPath(fr,fc,tr,tc){
   const dr=Math.sign(tr-fr),dc=Math.sign(tc-fc);
@@ -195,7 +196,57 @@ function getTurretTargets(r,c){
   const p=boardState[r]?.[c];
   if(!p||p.type!=="turret"||p.turretDisabled||p.ammo<=0)return[];
   const out=[];
-  for(let tr=0;tr<8;tr++)for(let tc=0;tc<8;tc++){const q=boardState[tr][tc];if(q&&q.type!=="king")out.push({r:tr,c:tc})}
+  for(let tr=0;tr<8;tr++)for(let tc=0;tc<8;tc++){
+    const dist=Math.max(Math.abs(tr-r),Math.abs(tc-c));
+    if(dist<2||dist>3)continue;
+    const q=boardState[tr][tc];
+    if(q)out.push({r:tr,c:tc});
+  }
+  return out;
+}
+
+/*
+ * 잠수함: 인접한(체비셰프 거리 1) 바다 칸의 함선만 공격 가능 (해전 전용).
+ */
+function getSubmarineTargets(r,c){
+  const p=pieceAt(r,c);
+  if(!p||p.type!=="submarine")return[];
+  const out=[];
+  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+    if(dr===0&&dc===0)continue;
+    const tr=r+dr,tc=c+dc;
+    if(isSeaSquare(tr,tc)&&seaPieceAt(tr,tc))out.push({r:tr,c:tc});
+  }
+  return out;
+}
+
+/*
+ * 전함: 자신 위치 기준 3*3(체비셰프 거리 <=1) 범위를 한꺼번에 포격한다.
+ * 대상을 따로 고르지 않으므로, 자기 자신을 다시 클릭하면 발동한다.
+ */
+function getBattleshipBlast(r,c){
+  const out=[];
+  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+    if(dr===0&&dc===0)continue;
+    const tr=r+dr,tc=c+dc;
+    if(pieceAt(tr,tc))out.push({r:tr,c:tc});
+  }
+  return out;
+}
+
+/*
+ * 항공모함: 자신 기준 7*7(체비셰프 거리 <=3) 범위의 빈 칸으로 이동 가능.
+ */
+function getCarrierMoves(r,c){
+  const p=pieceAt(r,c);
+  if(!p||p.type!=="carrier")return[];
+  const out=[];
+  for(let tr=r-3;tr<=r+3;tr++)for(let tc=c-3;tc<=c+3;tc++){
+    if(tr===r&&tc===c)continue;
+    if(tr<-1||tr>8||tc<-1||tc>8)continue;
+    if(!inside(tr,tc)&&!isSeaSquare(tr,tc))continue;
+    if(!pieceAt(tr,tc))out.push({r:tr,c:tc});
+  }
   return out;
 }
 function countOwn(type){
@@ -210,17 +261,26 @@ function countOwn(type){
  */
 function combinable(a,b){
   if(!a||!b||a.color!==b.color||a.gun||b.gun)return false;
+  if((a.type==="fleet")||(b.type==="fleet")){
+    const other=a.type==="fleet"?b:a;
+    return other.type!=="fleet"&&["pawn","rook","bishop"].includes(other.type);
+  }
   return(a.type==="knight"&&b.type==="knight")||(a.type==="bishop"&&b.type==="bishop")||(a.type==="rook"&&b.type==="rook")||((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="turret")||(a.type==="turret"&&b.type==="pawn"));
 }
-const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",queen:"퀸",king:"킹"};
+const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",queen:"퀸",king:"킹",fleet:"함대 편제"};
 
 /*
  * 연성 결과 판정. server.js의 forge 액션 판정 로직과 반드시 동일하게 유지한다.
  */
-const RESULT_LABEL={wildHorse:"야생마",necromancer:"네크로맨서",tank:"전차",turret:"포탑",cavalry:"기마병",reload:"포탑 탄약 +1"};
+const RESULT_LABEL={wildHorse:"야생마",necromancer:"네크로맨서",tank:"전차",turret:"포탑",cavalry:"기마병",reload:"포탑 탄약 +1",fleet:"함대 편제",submarine:"잠수함",battleship:"전함",carrier:"항공모함"};
 function combineResultInfo(a,b){
   let result=null;
-  if(a.type==="knight"&&b.type==="knight")result="wildHorse";
+  if(a.type==="fleet"||b.type==="fleet"){
+    const other=a.type==="fleet"?b:a;
+    const fusions={pawn:"submarine",rook:"battleship",bishop:"carrier"};
+    result=fusions[other.type]||null;
+  }
+  else if(a.type==="knight"&&b.type==="knight")result="wildHorse";
   else if(a.type==="bishop"&&b.type==="bishop")result="necromancer";
   else if(a.type==="rook"&&b.type==="rook")result="tank";
   else if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))result="turret";
@@ -228,6 +288,12 @@ function combineResultInfo(a,b){
   else if((a.type==="pawn"&&b.type==="turret")||(a.type==="turret"&&b.type==="pawn"))result="reload";
   if(!result)return null;
   return {result,label:RESULT_LABEL[result]};
+}
+function combinable3(a,b,c){
+  if(!a||!b||!c)return false;
+  if(a.color!==b.color||b.color!==c.color)return false;
+  if(a.gun||b.gun||c.gun)return false;
+  return a.type==="pawn"&&b.type==="pawn"&&c.type==="pawn";
 }
 
 /*
@@ -241,6 +307,7 @@ function pieceGlyph(p){
   if(p.type==="necromancer")return p.color==="white"?"♗":"♝";
   if(p.type==="cavalry")return p.color==="white"?"♘":"♞";
   if(p.type==="tank")return "▣";
+  if(p.type==="fleet")return "⚓";
   if(p.type==="colossus")return p.color==="white"?"♔":"♚";
   if(p.type==="turret")return p.color==="white"?"♖":"♜";
   if(p.symbol)return p.symbol;
@@ -269,7 +336,7 @@ let draggedFrom=null; // 드래그 중인 기물의 {r,c}
 
 function forgeFilledCells(){
   return forgeCells
-    .map((pos,i)=>pos?{i,r:pos.r,c:pos.c,p:boardState[pos.r]?.[pos.c]}:null)
+    .map((pos,i)=>pos?{i,r:pos.r,c:pos.c,p:pieceAt(pos.r,pos.c)}:null)
     .filter(x=>x&&x.p);
 }
 
@@ -282,7 +349,7 @@ function renderForgeGrid(){
     cellEl.dataset.index=i;
 
     const pos=forgeCells[i];
-    const p=pos?boardState[pos.r]?.[pos.c]:null;
+    const p=pos?pieceAt(pos.r,pos.c):null;
 
     /*
      * 참조하던 기물이 다른 액션(상대의 수, 자신의 이동 등)으로
@@ -340,10 +407,34 @@ function renderForgeOutput(){
     return;
   }
 
-  if(filled.length!==2){
+  if(filled.length!==2&&filled.length!==3){
     outEl.classList.add("invalid");
-    infoEl.textContent="재료는 정확히 2개를 놓아야 합니다.";
+    infoEl.textContent="재료는 2개(일반 연성) 또는 폰 3개(함대 편제)를 놓아야 합니다.";
     confirmBtn.classList.add("hidden");
+    return;
+  }
+
+  if(filled.length===3){
+    const [A,B,C]=filled;
+    const ok=combinable3(A.p,B.p,C.p);
+
+    if(!ok){
+      outEl.classList.add("invalid");
+      infoEl.textContent="폰 3개만 함대 편제로 연성할 수 있습니다.";
+      confirmBtn.classList.add("hidden");
+      return;
+    }
+
+    const cannotForgeNow3=currentTurn!==myColor||gameEnded||!!pendingForge?.[myColor];
+
+    outEl.classList.add("ready");
+    const glyph3=document.createElement("span");
+    glyph3.className=myColor==="white"?"white-piece":"black-piece";
+    glyph3.textContent=pieceGlyph({type:"fleet",color:myColor});
+    outEl.appendChild(glyph3);
+
+    infoEl.textContent=`${PIECE_LABEL.pawn}(${squareLabel(A.r,A.c)}) + ${PIECE_LABEL.pawn}(${squareLabel(B.r,B.c)}) + ${PIECE_LABEL.pawn}(${squareLabel(C.r,C.c)}) → ${RESULT_LABEL.fleet} (만든 뒤 바다 칸에 배치, 배치 시 턴 소모)`;
+    confirmBtn.classList.toggle("hidden",cannotForgeNow3);
     return;
   }
 
@@ -365,8 +456,9 @@ function renderForgeOutput(){
   glyph.textContent=info.result==="reload"?pieceGlyph({type:"turret",color:myColor}):pieceGlyph({type:info.result,color:myColor});
   outEl.appendChild(glyph);
 
-  const tail=info.result==="reload"?"(제자리에서 즉시 적용, 턴 소모)":"(만든 뒤 지배하는 빈 칸에 배치, 배치 시 턴 소모)";
-  infoEl.textContent=`${PIECE_LABEL[A.p.type]||A.p.type}(${squareName(A.r,A.c)}) + ${PIECE_LABEL[B.p.type]||B.p.type}(${squareName(B.r,B.c)}) → ${info.label} ${tail}`;
+  const isFleetFusion=["submarine","battleship","carrier"].includes(info.result);
+  const tail=info.result==="reload"?"(제자리에서 즉시 적용, 턴 소모)":isFleetFusion?"(만든 뒤 바다 칸에 배치, 배치 시 턴 소모)":"(만든 뒤 지배하는 빈 칸에 배치, 배치 시 턴 소모)";
+  infoEl.textContent=`${PIECE_LABEL[A.p.type]||A.p.type}(${squareLabel(A.r,A.c)}) + ${PIECE_LABEL[B.p.type]||B.p.type}(${squareLabel(B.r,B.c)}) → ${info.label} ${tail}`;
   confirmBtn.classList.toggle("hidden",cannotForgeNow);
 }
 
@@ -384,6 +476,13 @@ document.getElementById("forgeReset").addEventListener("click",resetForgeCells);
 
 document.getElementById("forgeConfirm").addEventListener("click",()=>{
   const filled=forgeFilledCells();
+  if(filled.length===3){
+    const [A,B,C]=filled;
+    if(!combinable3(A.p,B.p,C.p))return;
+    sendAction({type:"forge",fr:A.r,fc:A.c,tr:B.r,tc:B.c,er:C.r,ec:C.c});
+    resetForgeCells();
+    return;
+  }
   if(filled.length!==2)return;
   const [A,B]=filled;
   sendAction({type:"forge",fr:A.r,fc:A.c,tr:B.r,tc:B.c});
@@ -407,6 +506,12 @@ function updateForgePlacementBanner(){
   const glyphEl=document.getElementById("forgePendingGlyph");
   glyphEl.className=myColor==="white"?"white-piece forge-pending-glyph":"black-piece forge-pending-glyph";
   glyphEl.textContent=pieceGlyph(pending.piece);
+
+  const hintEl=document.getElementById("forgePlacementHint");
+  const isFleetFamily=["fleet","submarine","battleship","carrier"].includes(pending.piece.type);
+  hintEl.textContent=isFleetFamily
+    ?"보드를 둘러싼 바다 칸(검은 칸)의 빈 칸을 클릭해 배치하세요."
+    :"지배하는 빈 칸을 클릭해 배치하세요.";
 }
 
 document.getElementById("forgePlacementCancel").addEventListener("click",()=>{
@@ -462,6 +567,37 @@ function showPromotion(){
  */
 const ATTR_ICON={armored:"🛡",piercing:"⚔"};
 
+function isEdgeSquare(r,c){
+  return r===0||r===7||c===0||c===7;
+}
+
+/*
+ * 바다 칸(36칸) - 보드(0~7,0~7)를 감싸는 테두리 한 칸짜리 링.
+ * 좌표는 -1~8 범위를 쓴다. server.js의 isSeaSquare와 동일하게 유지한다.
+ */
+function isSeaSquare(r,c){
+  if(r<-1||r>8||c<-1||c>8)return false;
+  return r===-1||r===8||c===-1||c===8;
+}
+function seaKey(r,c){return r+","+c}
+function seaPieceAt(r,c){return seaState?.[seaKey(r,c)]||null}
+function pieceAt(r,c){
+  if(isSeaSquare(r,c))return seaPieceAt(r,c);
+  return boardState?.[r]?.[c]||null;
+}
+
+function isPlaceable(r,c){
+  const pending=pendingForge?.[myColor];
+  if(!pending)return false;
+  const isFleetFamily=["fleet","submarine","battleship","carrier"].includes(pending.piece.type);
+  if(isFleetFamily){
+    return isSeaSquare(r,c)&&!seaPieceAt(r,c);
+  }
+  if(!inside(r,c))return false;
+  if(boardState[r][c])return false;
+  return control?.[r]?.[c]===myColor;
+}
+
 function drawBoard(){
   const board=document.getElementById("board");
   board.innerHTML="";
@@ -470,19 +606,22 @@ function drawBoard(){
   let moves2=selected?getMoves(selected.r,selected.c):[],
       guns=selected?getGunTargets(selected.r,selected.c):[],
       turrets=selected?getTurretTargets(selected.r,selected.c):[],
+      subTargets=selected?getSubmarineTargets(selected.r,selected.c):[],
+      carrierMoves=selected?getCarrierMoves(selected.r,selected.c):[],
       singularityTargets=selected?getSingularityTargets(selected.r,selected.c):[];
 
-  for(let dr=0;dr<8;dr++)for(let dc=0;dc<8;dc++){
+  for(let dr=-1;dr<=8;dr++)for(let dc=-1;dc<=8;dc++){
     const r=myColor==="black"?7-dr:dr, c=myColor==="black"?7-dc:dc;
+    const isSea=isSeaSquare(r,c);
     const s=document.createElement("div");
-    s.className="square "+((r+c)%2===0?"light":"dark");
-    const p=boardState[r][c];
+    s.className="square "+(isSea?"sea-square":((r+c)%2===0?"light":"dark"));
+    const p=pieceAt(r,c);
 
     const ctrl=control?.[r]?.[c];
     if(ctrl==="white")s.classList.add("control-white");
     if(ctrl==="black")s.classList.add("control-black");
 
-    if(pendingForge?.[myColor]&&!p&&ctrl===myColor){
+    if(isPlaceable(r,c)){
       s.classList.add("placeable");
     }
 
@@ -497,6 +636,10 @@ function drawBoard(){
       if(p.type==="wildHorse")el.classList.add("wildhorse");
       if(p.type==="necromancer")el.classList.add("necromancer");
       if(p.type==="cavalry")el.classList.add("cavalry");
+      if(p.type==="fleet")el.classList.add("fleet");
+      if(p.type==="submarine")el.classList.add("submarine");
+      if(p.type==="battleship")el.classList.add("battleship");
+      if(p.type==="carrier")el.classList.add("carrier");
       if(p.attributes?.fire)el.classList.add("piece-fire");
       if(p.attributes?.cold)el.classList.add("piece-cold");
       el.textContent=pieceGlyph(p);
@@ -548,8 +691,9 @@ function drawBoard(){
     }
 
     if(selected?.r===r&&selected?.c===c)s.classList.add("selected");
-    if(moves2.some(x=>x.r===r&&x.c===c)){s.classList.add("possible");if(p)s.classList.add("capture");else s.classList.add("empty")}
-    if(guns.some(x=>x.r===r&&x.c===c)||turrets.some(x=>x.r===r&&x.c===c))s.classList.add("attack");
+    if(moves2.some(x=>x.r===r&&x.c===c)||carrierMoves.some(x=>x.r===r&&x.c===c)){s.classList.add("possible");if(p)s.classList.add("capture");else s.classList.add("empty")}
+    if(guns.some(x=>x.r===r&&x.c===c)||turrets.some(x=>x.r===r&&x.c===c)||subTargets.some(x=>x.r===r&&x.c===c))s.classList.add("attack");
+    if(selected&&pieceAt(selected.r,selected.c)?.type==="battleship"&&getBattleshipBlast(selected.r,selected.c).some(x=>x.r===r&&x.c===c))s.classList.add("attack");
     if(singularityTargets.some(x=>x.r===r&&x.c===c))s.classList.add("singularity-target");
 
     s.addEventListener("click",()=>handleSquareClick(r,c));
@@ -566,7 +710,7 @@ async function handleSquareClick(r,c){
    * (지배하는 빈 칸에) 배치하는 동작으로만 취급된다.
    */
   if(pendingForge?.[myColor]){
-    if(!boardState[r][c]&&control?.[r]?.[c]===myColor){
+    if(isPlaceable(r,c)){
       sendAction({type:"placeForged",r,c});
     }
     return;
@@ -587,15 +731,38 @@ async function handleSquareClick(r,c){
 
   if(currentTurn!==myColor)return;
 
-  const p=boardState[r][c];
+  const p=pieceAt(r,c);
   if(!selected){
     if(p?.color===myColor){selected={r,c};drawBoard()}
     return;
   }
 
-  const fr=selected.r,fc=selected.c,sp=boardState[fr][fc];
+  const fr=selected.r,fc=selected.c,sp=pieceAt(fr,fc);
 
-  if(fr===r&&fc===c){selected=null;drawBoard();return}
+  if(fr===r&&fc===c){
+    /*
+     * 전함은 대상을 따로 고르지 않고 자기 자신을 다시 클릭하면
+     * 3*3 포격이 즉시 발동한다.
+     */
+    if(sp?.type==="battleship"&&sp.color===myColor&&getBattleshipBlast(fr,fc).length){
+      sendAction({type:"battleshipAttack",fr,fc});
+      selected=null;
+      return;
+    }
+    selected=null;drawBoard();return;
+  }
+
+  if(sp?.type==="submarine"&&getSubmarineTargets(fr,fc).some(x=>x.r===r&&x.c===c)){
+    sendAction({type:"submarineAttack",fr,fc,tr:r,tc:c});
+    selected=null;
+    return;
+  }
+
+  if(sp?.type==="carrier"&&getCarrierMoves(fr,fc).some(x=>x.r===r&&x.c===c)){
+    sendAction({type:"carrierMove",fr,fc,tr:r,tc:c});
+    selected=null;
+    return;
+  }
 
   if(sp?.gun&&getGunTargets(fr,fc).some(x=>x.r===r&&x.c===c)){
     sendAction({type:"gunAttack",fr,fc,tr:r,tc:c});

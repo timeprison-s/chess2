@@ -102,16 +102,16 @@ body {
 ========================= */
 
 #board {
-    width: 640px;
-    height: 640px;
+    width: 800px;
+    height: 800px;
 
     display: grid;
 
     grid-template-columns:
-        repeat(8,1fr);
+        repeat(10,1fr);
 
     grid-template-rows:
-        repeat(8,1fr);
+        repeat(10,1fr);
 
     border: 4px solid #111;
 }
@@ -143,6 +143,15 @@ body {
 
 .dark {
     background: #222;
+}
+
+
+.sea-square {
+    background: #020c18;
+    border: 1px solid #06233d;
+}
+.sea-square.placeable {
+    box-shadow: inset 0 0 0 3px #33e0ff;
 }
 
 
@@ -400,6 +409,56 @@ body {
     color: #ffd700;
 
     font-size: 15px;
+}
+
+
+.fleet {
+    text-shadow:
+        0 0 7px #33e0ff,
+        0 0 15px #0088aa,
+        2px 2px 2px black;
+}
+
+
+.submarine::after {
+    content: "S";
+
+    position: absolute;
+
+    right: -3px;
+    top: -4px;
+
+    color: #33e0ff;
+
+    font-size: 14px;
+}
+
+
+.battleship::after {
+    content: "B";
+
+    position: absolute;
+
+    right: -3px;
+    top: -4px;
+
+    color: #ff8844;
+
+    font-size: 14px;
+}
+
+
+.carrier::after {
+    content: "V";
+
+    position: absolute;
+
+    right: -3px;
+    top: -4px;
+
+    color: #a0ffb0;
+
+    font-size: 14px;
 }
 
 

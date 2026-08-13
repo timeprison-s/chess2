@@ -10,16 +10,19 @@ const rooms = new Map();
 /*
  * 특성(속성) 시스템.
  *
- * 장갑(armored): 룩과 결합해 만들어진 기물(포탑/전차)이 갖는다. 목숨이 2개.
- * 관통(piercing): 이름에 "전차"나 "포"가 들어간 기물(전차/포탑)이 갖는다.
+ * 장갑(armored): 룩과 결합해 만들어진 기물(포탑/전차)과 함대 계열
+ *               (함대 편제/잠수함/전함/항공모함)이 갖는다. 목숨이 2개.
+ * 관통(piercing): 이름에 "전차"나 "포"가 들어간 기물(전차/포탑),
+ *                 그리고 포 특성을 가진 잠수함/전함이 갖는다.
  * 화(fire): 게임 시작 시 보드 전체에서 무작위로 기물 딱 1개에게 부여된다.
  * 냉(cold): 게임 시작 시 화 속성을 받은 기물의 반대 진영에서 무작위로 기물
  *           딱 1개에게 부여된다(같은 진영끼리는 겹치지 않는다).
  *           냉 속성 기물은 관통 또는 화 속성을 가진 공격에만 피해를 입는다.
  */
 function computeAttributes(type) {
-    const armored = type === "turret" || type === "tank";
-    const piercing = type === "tank" || type === "turret"; // 전차 / 포(탑)
+    const isFleetFamily = type === "fleet" || type === "submarine" || type === "battleship" || type === "carrier";
+    const armored = type === "turret" || type === "tank" || isFleetFamily;
+    const piercing = type === "tank" || type === "turret" || type === "submarine" || type === "battleship"; // 전차 / 포(탑) / 포 특성을 가진 함선
     return {
         armored,
         piercing,
@@ -152,6 +155,7 @@ function makeRoom(code, password, name) {
         password: password || null,
         board: initialBoard(),
         control: initialControl(),
+        sea: makeSea(),
 
         pendingForge: {
             white: null,
@@ -225,7 +229,11 @@ const PIECE_VALUE = {
     cavalry: 6,
     turret: 5,
     tank: 8,
-    colossus: 0
+    colossus: 0,
+    fleet: 7,
+    submarine: 6,
+    battleship: 9,
+    carrier: 7
 };
 
 function pieceValue(p) {
@@ -236,6 +244,54 @@ function pieceValue(p) {
 
 function inside(r,c) {
     return r >= 0 && r < 8 && c >= 0 && c < 8;
+}
+
+/*
+ * 바다 칸(36칸).
+ *
+ * 보드(0~7, 0~7)를 감싸는 테두리 한 칸짜리 링으로, 좌표는 -1~8 범위를 쓴다.
+ * (r===-1 || r===8 || c===-1 || c===8) 이면서 -1<=r,c<=8 인 칸이 바다.
+ * 함대 계열 기물(함대 편제/잠수함/전함/항공모함, 항공모함 제외 이동 없음)은
+ * 이 바다 칸에만 배치할 수 있다.
+ */
+function isSeaSquare(r,c) {
+    if (r < -1 || r > 8 || c < -1 || c > 8) return false;
+    return r === -1 || r === 8 || c === -1 || c === 8;
+}
+
+function seaKey(r,c) {
+    return r + "," + c;
+}
+
+function makeSea() {
+    const sea = {};
+
+    for (let r = -1; r <= 8; r++) {
+        for (let c = -1; c <= 8; c++) {
+            if (isSeaSquare(r,c)) sea[seaKey(r,c)] = null;
+        }
+    }
+
+    return sea;
+}
+
+/*
+ * 바다/일반 보드 어느 쪽이든 상관없이 좌표로 기물을 읽고/쓰는 헬퍼.
+ * 함대 계열 연성(H + 폰/룩/비숍)은 재료 하나가 바다 칸에 있을 수 있으므로 필요하다.
+ */
+function pieceAt(room, r, c) {
+    if (isSeaSquare(r,c)) return room.sea[seaKey(r,c)] || null;
+    if (!inside(r,c)) return null;
+    return room.board[r][c];
+}
+
+function setPieceAt(room, r, c, piece) {
+    if (isSeaSquare(r,c)) {
+        room.sea[seaKey(r,c)] = piece;
+        return;
+    }
+    if (!inside(r,c)) return;
+    room.board[r][c] = piece;
 }
 
 /*
@@ -410,7 +466,7 @@ function addMove(room, text) {
 }
 
 function capture(room, r, c) {
-    const p = room.board[r][c];
+    const p = pieceAt(room, r, c);
 
     if (!p) return null;
 
@@ -418,7 +474,7 @@ function capture(room, r, c) {
     p.deathCol = c;
 
     room.deadPieces[p.color].push(p);
-    room.board[r][c] = null;
+    setPieceAt(room, r, c, null);
 
     const capturingColor = p.color === "white" ? "black" : "white";
     room.score[capturingColor] += pieceValue(p);
@@ -442,7 +498,7 @@ function capture(room, r, c) {
  * 이 함수를 거치지 않는다.
  */
 function damageOrKill(room, r, c, attackerAttrs) {
-    const p = room.board[r][c];
+    const p = pieceAt(room, r, c);
 
     if (!p) return { hit: false };
 
@@ -665,39 +721,82 @@ function advanceTurn(room) {
     processSingularities(room);
 }
 
-function broadcast(room) {
-    const data = JSON.stringify({
-        type: "state",
-        board: room.board,
-        control: room.control,
-        pendingForge: room.pendingForge,
-        currentTurn: room.currentTurn,
-        moves: room.moves,
-        time: room.time,
-        score: room.score,
-        moveCount: room.moveCount,
-        singularities: room.singularities,
-        colossusReady: room.colossusReady,
-        colossusSacrificeReady: {
-            white: sacrificeColossusEligible(room,"white"),
-            black: sacrificeColossusEligible(room,"black")
-        },
-        gameEnded: room.gameEnded,
-        players: {
-            white: !!room.players.white,
-            black: !!room.players.black
-        }
-    });
+/*
+ * 잠수함 시야 필터.
+ *
+ * 잠수함은 기본적으로 상대방에게 보이지 않는다. 단, 상대방의 전함이
+ * 그 잠수함과 인접(체비셰프 거리 <= 1)해 있으면 그때는 보인다.
+ * 자신의 잠수함은 항상 자신에게 보인다.
+ */
+function buildSeaView(room, viewerColor) {
+    const view = {};
 
+    for (const key in room.sea) {
+        const piece = room.sea[key];
+
+        if (!piece || piece.type !== "submarine" || piece.color === viewerColor) {
+            view[key] = piece;
+            continue;
+        }
+
+        const [sr,sc] = key.split(",").map(Number);
+        let detected = false;
+
+        for (const bKey in room.sea) {
+            const b = room.sea[bKey];
+
+            if (!b || b.type !== "battleship" || b.color !== viewerColor) continue;
+
+            const [br,bc] = bKey.split(",").map(Number);
+
+            if (Math.max(Math.abs(br-sr), Math.abs(bc-sc)) <= 1) {
+                detected = true;
+                break;
+            }
+        }
+
+        view[key] = detected ? piece : null;
+    }
+
+    return view;
+}
+
+function broadcast(room) {
     for (const color of ["white","black"]) {
         const ws = room.players[color];
 
         if (
-            ws &&
-            ws.readyState === WebSocket.OPEN
+            !ws ||
+            ws.readyState !== WebSocket.OPEN
         ) {
-            ws.send(data);
+            continue;
         }
+
+        const data = JSON.stringify({
+            type: "state",
+            board: room.board,
+            control: room.control,
+            sea: buildSeaView(room, color),
+            pendingForge: room.pendingForge,
+            currentTurn: room.currentTurn,
+            moves: room.moves,
+            time: room.time,
+            score: room.score,
+            moveCount: room.moveCount,
+            singularities: room.singularities,
+            colossusReady: room.colossusReady,
+            colossusSacrificeReady: {
+                white: sacrificeColossusEligible(room,"white"),
+                black: sacrificeColossusEligible(room,"black")
+            },
+            gameEnded: room.gameEnded,
+            players: {
+                white: !!room.players.white,
+                black: !!room.players.black
+            }
+        });
+
+        ws.send(data);
     }
 }
 
@@ -795,6 +894,7 @@ function handleAction(room, ws, action) {
 
         room.board = fresh.board;
         room.control = fresh.control;
+        room.sea = fresh.sea;
         room.pendingForge = fresh.pendingForge;
         room.currentTurn = fresh.currentTurn;
         room.extraTurns = fresh.extraTurns;
@@ -1158,8 +1258,11 @@ function handleAction(room, ws, action) {
     /*
      * 포탑 공격.
      *
-     * 목표 칸 + 앞/뒤/좌/우 최대 4칸까지 함께 파괴한다 (킹 제외).
+     * 목표 칸 + 앞/뒤/좌/우 최대 4칸까지 함께 파괴한다 (킹 포함).
      * 자신의 기물도 목표로 삼을 수 있다.
+     * 공격 범위: 자신 기준 3x3(체비셰프 거리 1 이하)은 공격 불가,
+     * 최대 7x7(체비셰프 거리 3 이하)까지만 공격 가능.
+     * 즉 목표 칸까지의 체비셰프 거리가 2~3이어야 한다.
      * 포탑은 2회 공격당해야 파괴된다.
      */
     if (action.type === "turretAttack") {
@@ -1181,9 +1284,15 @@ function handleAction(room, ws, action) {
         const primary =
             room.board[action.tr]?.[action.tc];
 
+        const turretDist = Math.max(
+            Math.abs(action.tr - action.fr),
+            Math.abs(action.tc - action.fc)
+        );
+
         if (
             !primary ||
-            primary.type === "king"
+            turretDist < 2 ||
+            turretDist > 3
         ) {
             sendError(ws,"포탑 공격이 불가능합니다.");
             return;
@@ -1207,7 +1316,6 @@ function handleAction(room, ws, action) {
             const victim = room.board[hr][hc];
 
             if (!victim) continue;
-            if (victim.type === "king") continue; // 포탑은 킹을 직접(스플래시 포함) 죽일 수 없다
 
             damageOrKill(room, hr, hc, turret.attributes);
         }
@@ -1233,6 +1341,150 @@ function handleAction(room, ws, action) {
     }
 
     /*
+     * 잠수함 공격.
+     *
+     * 인접한(체비셰프 거리 1) 바다 칸만 공격할 수 있다 (해전만 가능,
+     * 지상 공격 불가). 포 특성(관통)을 갖는다.
+     */
+    if (action.type === "submarineAttack") {
+
+        const sub =
+            pieceAt(room, action.fr, action.fc);
+
+        if (
+            !sub ||
+            sub.color !== playerColor ||
+            sub.type !== "submarine" ||
+            !isSeaSquare(action.fr, action.fc)
+        ) {
+            sendError(ws,"잠수함 공격이 불가능합니다.");
+            return;
+        }
+
+        const subDist = Math.max(
+            Math.abs(action.tr - action.fr),
+            Math.abs(action.tc - action.fc)
+        );
+
+        if (
+            subDist !== 1 ||
+            !isSeaSquare(action.tr, action.tc) ||
+            !pieceAt(room, action.tr, action.tc)
+        ) {
+            sendError(ws,"잠수함은 인접한 바다 칸의 함선만 공격할 수 있습니다.");
+            return;
+        }
+
+        damageOrKill(room, action.tr, action.tc, sub.attributes);
+
+        addMove(
+            room,
+            "바다(" + action.fr + "," + action.fc + ")[SUB]x바다(" + action.tr + "," + action.tc + ")"
+        );
+
+        finishIfNeeded(room);
+        advanceTurn(room);
+        broadcast(room);
+
+        return;
+    }
+
+    /*
+     * 전함 공격.
+     *
+     * 자신이 있는 바다 칸을 기준으로 3*3(체비셰프 거리 <= 1) 범위를
+     * 한꺼번에 공격한다 (자기 자신 제외). 포 특성(관통)을 갖는다.
+     */
+    if (action.type === "battleshipAttack") {
+
+        const ship =
+            pieceAt(room, action.fr, action.fc);
+
+        if (
+            !ship ||
+            ship.color !== playerColor ||
+            ship.type !== "battleship" ||
+            !isSeaSquare(action.fr, action.fc)
+        ) {
+            sendError(ws,"전함 공격이 불가능합니다.");
+            return;
+        }
+
+        for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+                if (dr === 0 && dc === 0) continue;
+
+                const nr = action.fr + dr;
+                const nc = action.fc + dc;
+
+                if (pieceAt(room, nr, nc)) {
+                    damageOrKill(room, nr, nc, ship.attributes);
+                }
+            }
+        }
+
+        addMove(
+            room,
+            "바다(" + action.fr + "," + action.fc + ")[BS]"
+        );
+
+        finishIfNeeded(room);
+        advanceTurn(room);
+        broadcast(room);
+
+        return;
+    }
+
+    /*
+     * 항공모함 이동.
+     *
+     * 자신 기준 7*7(체비셰프 거리 <= 3) 범위 안의 빈 칸으로
+     * (경로에 상관없이) 이동할 수 있다.
+     */
+    if (action.type === "carrierMove") {
+
+        const carrier =
+            pieceAt(room, action.fr, action.fc);
+
+        if (
+            !carrier ||
+            carrier.color !== playerColor ||
+            carrier.type !== "carrier"
+        ) {
+            sendError(ws,"항공모함 이동이 불가능합니다.");
+            return;
+        }
+
+        const cvDist = Math.max(
+            Math.abs(action.tr - action.fr),
+            Math.abs(action.tc - action.fc)
+        );
+
+        if (
+            cvDist === 0 ||
+            cvDist > 3 ||
+            pieceAt(room, action.tr, action.tc)
+        ) {
+            sendError(ws,"항공모함 이동이 불가능합니다.");
+            return;
+        }
+
+        setPieceAt(room, action.fr, action.fc, null);
+        setPieceAt(room, action.tr, action.tc, carrier);
+
+        addMove(
+            room,
+            "바다(" + action.fr + "," + action.fc + ")[CV]바다(" + action.tr + "," + action.tc + ")"
+        );
+
+        finishIfNeeded(room);
+        advanceTurn(room);
+        broadcast(room);
+
+        return;
+    }
+
+    /*
      * 연성(forge).
      *
      * 합성 가능한 두 기물이라면 보드 어디에 있든(거리 제한 없이) 연성할 수 있다.
@@ -1242,10 +1494,10 @@ function handleAction(room, ws, action) {
     if (action.type === "forge") {
 
         const a =
-            room.board[action.fr]?.[action.fc];
+            pieceAt(room, action.fr, action.fc);
 
         const b =
-            room.board[action.tr]?.[action.tc];
+            pieceAt(room, action.tr, action.tc);
 
         if (
             !a ||
@@ -1262,6 +1514,110 @@ function handleAction(room, ws, action) {
             b.gun
         ) {
             sendError(ws,"총이 장착된 폰은 연성할 수 없습니다.");
+            return;
+        }
+
+        /*
+         * 함대 편제(H) 융합.
+         *
+         * H + 폰 = 잠수함, H + 룩 = 전함, H + 비숍 = 항공모함.
+         * H는 바다 칸에 있으므로 재료 좌표 중 하나는 바다 칸일 수 있다.
+         * 결과 기물도 바다 칸에만 배치할 수 있다(placeForged에서 처리).
+         */
+        const fleetMat = a.type === "fleet" ? a : (b.type === "fleet" ? b : null);
+        const otherMat = a.type === "fleet" ? b : a;
+
+        if (fleetMat && otherMat.type !== "fleet") {
+            const fusions = { pawn: "submarine", rook: "battleship", bishop: "carrier" };
+            const fusionResult = fusions[otherMat.type];
+
+            if (!fusionResult) {
+                sendError(ws,"함대 편제와 이 기물은 연성할 수 없습니다.");
+                return;
+            }
+
+            const fusionLabelGlyph = {
+                submarine: "⚓",
+                battleship: "⚓",
+                carrier: "⚓"
+            };
+
+            const fusedPiece = createPiece(
+                fusionResult,
+                playerColor,
+                fusionLabelGlyph[fusionResult]
+            );
+
+            if (a.attributes.fire || b.attributes.fire) fusedPiece.attributes.fire = true;
+            if (a.attributes.cold || b.attributes.cold) fusedPiece.attributes.cold = true;
+
+            setPieceAt(room, action.fr, action.fc, null);
+            setPieceAt(room, action.tr, action.tc, null);
+
+            room.pendingForge[playerColor] = {
+                piece: fusedPiece,
+                sourceA: { r: action.fr, c: action.fc, piece: a },
+                sourceB: { r: action.tr, c: action.tc, piece: b }
+            };
+
+            broadcast(room);
+
+            return;
+        }
+
+        /*
+         * 함대 편제.
+         *
+         * 폰 세 개(연성대 세 칸)를 함께 연성하면 "함대 편제"가 만들어진다.
+         * er/ec가 함께 오면 3재료 연성으로 취급한다.
+         * 배치는 다른 연성 기물과 달리 보드 테두리(1행/8행/a열/h열)에만 가능하다.
+         */
+        const hasThird = action.er !== undefined && action.ec !== undefined;
+
+        if (hasThird) {
+            const c =
+                room.board[action.er]?.[action.ec];
+
+            if (
+                !c ||
+                c.color !== playerColor ||
+                c.gun
+            ) {
+                sendError(ws,"연성할 수 없습니다.");
+                return;
+            }
+
+            if (
+                a.type !== "pawn" ||
+                b.type !== "pawn" ||
+                c.type !== "pawn"
+            ) {
+                sendError(ws,"이 세 기물은 연성할 수 없습니다.");
+                return;
+            }
+
+            const fleetPiece = createPiece(
+                "fleet",
+                playerColor,
+                playerColor === "white" ? "⚓" : "⚓"
+            );
+
+            if (a.attributes.fire || b.attributes.fire || c.attributes.fire) fleetPiece.attributes.fire = true;
+            if (a.attributes.cold || b.attributes.cold || c.attributes.cold) fleetPiece.attributes.cold = true;
+
+            room.board[action.fr][action.fc] = null;
+            room.board[action.tr][action.tc] = null;
+            room.board[action.er][action.ec] = null;
+
+            room.pendingForge[playerColor] = {
+                piece: fleetPiece,
+                sourceA: { r: action.fr, c: action.fc, piece: a },
+                sourceB: { r: action.tr, c: action.tc, piece: b },
+                sourceC: { r: action.er, c: action.ec, piece: c }
+            };
+
+            broadcast(room);
+
             return;
         }
 
@@ -1413,8 +1769,12 @@ function handleAction(room, ws, action) {
             return;
         }
 
-        room.board[pending.sourceA.r][pending.sourceA.c] = pending.sourceA.piece;
-        room.board[pending.sourceB.r][pending.sourceB.c] = pending.sourceB.piece;
+        setPieceAt(room, pending.sourceA.r, pending.sourceA.c, pending.sourceA.piece);
+        setPieceAt(room, pending.sourceB.r, pending.sourceB.c, pending.sourceB.piece);
+
+        if (pending.sourceC) {
+            setPieceAt(room, pending.sourceC.r, pending.sourceC.c, pending.sourceC.piece);
+        }
 
         room.pendingForge[playerColor] = null;
 
@@ -1437,6 +1797,47 @@ function handleAction(room, ws, action) {
         }
 
         const { r, c } = action;
+
+        const isFleetFamily = pending.piece.type === "fleet" ||
+            pending.piece.type === "submarine" ||
+            pending.piece.type === "battleship" ||
+            pending.piece.type === "carrier";
+
+        if (isFleetFamily) {
+            if (!isSeaSquare(r,c)) {
+                sendError(ws,"함대 계열 기물은 바다 칸에만 배치할 수 있습니다.");
+                return;
+            }
+
+            if (pieceAt(room,r,c)) {
+                sendError(ws,"그 칸에는 이미 기물이 있습니다.");
+                return;
+            }
+
+            room.sea[seaKey(r,c)] = pending.piece;
+            room.pendingForge[playerColor] = null;
+
+            const seaCodes = {
+                fleet: "FL",
+                submarine: "SUB",
+                battleship: "BS",
+                carrier: "CV"
+            };
+
+            addMove(
+                room,
+                "[" +
+                seaCodes[pending.piece.type] +
+                "]" +
+                "바다(" + r + "," + c + ")"
+            );
+
+            finishIfNeeded(room);
+            advanceTurn(room);
+            broadcast(room);
+
+            return;
+        }
 
         if (!inside(r,c)) {
             sendError(ws,"칸 위치가 잘못되었습니다.");
