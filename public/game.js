@@ -1311,7 +1311,9 @@ function finishTurn() {
   selectedId = null;
   uiMode = null;
   forgeIds = [];
+  forgeSlotIds = Array(9).fill(null);
   pendingCraft = null;
+  pendingCraftOrigins = [];
   endTurn(state);
   state.turnStartedAt = Date.now();
   sendState();
@@ -1769,21 +1771,29 @@ function movePiecePointerDrag(e) {
 
 function endPiecePointerDrag(e) {
   if (!pieceDrag || e.pointerId !== pieceDrag.pointerId) return;
+
   const drag = pieceDrag;
   pieceDrag = null;
 
   if (drag.active) {
-    const target = document.elementFromPoint(e.clientX,e.clientY);
-    const slot = target?.closest?.("[data-forge-slot]");
-    const forge = target?.closest?.("#forgeSlots");
+    const pointTarget = document.elementFromPoint(e.clientX, e.clientY);
+    const slot = pointTarget?.closest?.("[data-forge-slot]");
+    const forge = pointTarget?.closest?.("#forgeSlots");
+
+    let added = false;
 
     if (slot) {
-      addPieceToForgeSlot(drag.id, Number(slot.dataset.forgeSlot));
+      added = addPieceToForgeSlot(drag.id, Number(slot.dataset.forgeSlot));
     } else if (forge) {
-      addPieceToForgeSlot(drag.id);
+      added = addPieceToForgeSlot(drag.id);
     }
 
-    suppressBoardClickUntil = Date.now() + 220;
+    if (added) {
+      uiMode = "forge";
+      render();
+    }
+
+    suppressBoardClickUntil = Date.now() + 240;
     e.preventDefault();
     e.stopPropagation();
   }
@@ -1984,12 +1994,19 @@ function renderPlayers() {
 
   box.innerHTML = `
     <div class="game-player-card ${state.turn === "white" && !state.winner ? "turn" : ""}">
-      <div class="player-line"><span>Player 1</span><span>백 · ${statusFor("white")}</span></div>
-      <div class="game-clock" id="whiteClock">${formatClock(clockRemaining("white"))}</div>
+      <div class="player-line">
+        <span>Player 1</span>
+        <span>백${statusFor("white") ? ` · ${statusFor("white")}` : ""}</span>
+      </div>
+      <div class="game-clock" id="whiteClock" data-clock="white">${formatClock(displayedClockMs("white"))}</div>
     </div>
+
     <div class="game-player-card ${state.turn === "black" && !state.winner ? "turn" : ""}">
-      <div class="player-line"><span>Player 2</span><span>흑 · ${statusFor("black")}</span></div>
-      <div class="game-clock" id="blackClock">${formatClock(clockRemaining("black"))}</div>
+      <div class="player-line">
+        <span>Player 2</span>
+        <span>흑${statusFor("black") ? ` · ${statusFor("black")}` : ""}</span>
+      </div>
+      <div class="game-clock" id="blackClock" data-clock="black">${formatClock(displayedClockMs("black"))}</div>
     </div>
   `;
 }
@@ -2038,33 +2055,48 @@ function renderSide(p) {
 }
 
 
+
+function currentForgeRecipe() {
+  const materials = forgeMaterials();
+  if (!materials.length) return null;
+
+  const types = materials.map(p => p.type);
+  const loadout = state?.loadouts?.[state.turn] || [];
+  return recipeFor(types, loadout);
+}
+
 function renderForge() {
   cleanupForgeSlots();
 
   const selectedPieces = forgeMaterials();
+  const rec = currentForgeRecipe();
+
   const names = selectedPieces.map(p => PIECES[p.type].name);
   $("#forgeItems").textContent =
-    names.length ? names.join(" + ") : "기물을 보드에서 슬롯으로 드래그";
-
-  const rec = recipeFor(
-    selectedPieces.map(p => p.type),
-    state.loadouts[state.turn] || []
-  );
+    names.length ? names.join("  +  ") : "보드의 기물을 슬롯으로 드래그";
 
   const out = $("#forgeOutput");
 
   if (pendingCraft) {
-    $("#forgeResult").textContent = `배치 대기: ${PIECES[pendingCraft].name}`;
+    $("#forgeResult").innerHTML =
+      `<span class="forge-result-label">배치 대기</span><strong>${PIECES[pendingCraft].name}</strong>`;
     out.innerHTML = `<span class="forge-output-piece ${state.turn}">${pieceArt(pendingCraft)}</span>`;
+    out.classList.add("has-result");
   } else if (rec) {
-    $("#forgeResult").textContent = `결과: ${PIECES[rec.result].name}`;
+    $("#forgeResult").innerHTML =
+      `<span class="forge-result-label">합성 결과</span><strong>${PIECES[rec.result].name}</strong>`;
     out.innerHTML = `<span class="forge-output-piece ${state.turn}">${pieceArt(rec.result)}</span>`;
+    out.classList.add("has-result");
   } else {
-    $("#forgeResult").textContent = selectedPieces.length ? "결과: 조합 없음" : "결과: -";
-    out.textContent = "?";
+    $("#forgeResult").innerHTML = selectedPieces.length
+      ? `<span class="forge-result-label">합성 결과</span><strong class="forge-none">조합 없음</strong>`
+      : `<span class="forge-result-label">합성 결과</span><strong class="forge-none">—</strong>`;
+    out.textContent = "＋";
+    out.classList.remove("has-result");
   }
 
   const slots = $$("#forgeSlots > div");
+
   slots.forEach((slot, index) => {
     slot.dataset.forgeSlot = String(index);
     slot.innerHTML = "";
@@ -2072,6 +2104,7 @@ function renderForge() {
 
     const pid = forgeSlotIds[index];
     const p = pid ? state.pieces.find(x => x.id === pid) : null;
+
     slot.classList.toggle("filled", !!p);
 
     if (!p) return;
@@ -2079,7 +2112,8 @@ function renderForge() {
     const icon = document.createElement("span");
     icon.className = `forge-slot-piece ${p.controller}`;
     icon.innerHTML = pieceArt(p.type);
-    icon.title = `${PIECES[p.type].name} · 클릭하면 연성대에서 제거`;
+    icon.title = `${PIECES[p.type].name} · 클릭하면 제거`;
+
     icon.addEventListener("click", e => {
       e.stopPropagation();
       removeForgeSlot(index);
