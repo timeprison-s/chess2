@@ -290,9 +290,17 @@ wss.on("connection", ws => {
     }
 
     if (msg.type === "state") {
-      room.state = msg.state;
+      const incoming = msg.state;
+      if (incoming && typeof incoming === "object") {
+        if (!incoming.clocks) incoming.clocks = {white:600000, black:600000};
+        const sameTurn = room.state && room.state.ply === incoming.ply && room.state.turn === incoming.turn;
+        incoming.turnStartedAt = sameTurn && Number.isFinite(room.state.turnStartedAt)
+          ? room.state.turnStartedAt
+          : Date.now();
+      }
+      room.state = incoming;
       room.phase = "playing";
-      broadcast(room, {type: "state", state: msg.state}, ws);
+      broadcast(room, {type: "state", state: room.state}, ws);
       broadcastRoomList();
       return;
     }
@@ -305,6 +313,26 @@ wss.on("connection", ws => {
   ws.on("close", () => leaveCurrentRoom(ws, false));
   ws.on("error", err => console.error("WebSocket error:", err.message));
 });
+
+
+setInterval(() => {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    const state = room.state;
+    if (room.phase !== "playing" || !state || state.winner) continue;
+    if (!state.clocks || !Number.isFinite(state.turnStartedAt)) continue;
+    const color = state.turn;
+    const remaining = Number(state.clocks[color] ?? 0);
+    if (remaining - (now - state.turnStartedAt) <= 0) {
+      state.clocks[color] = 0;
+      state.winner = color === "white" ? "black" : "white";
+      state.turnStartedAt = now;
+      if (Array.isArray(state.log)) state.log.push(`${color === "white" ? "백" : "흑"} 시간 초과.`);
+      broadcast(room, {type: "state", state});
+      broadcastRoomList();
+    }
+  }
+}, 250);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`개잼체스 서버 실행: ${PORT}`);

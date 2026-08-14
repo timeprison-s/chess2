@@ -279,6 +279,8 @@ function createInitialState(loadouts={white:[],black:[]}) {
     princeCoronationOwnTurn:{white:null,black:null},
     revivals:[],
     winner:null,
+    clocks:{white:600000,black:600000},
+    turnStartedAt:Date.now(),
     log:["게임 시작. 백의 차례."],
   };
 }
@@ -810,7 +812,6 @@ const screens = {
 const boardEl = $("#board");
 const statusEl = $("#status");
 const sideEl = $("#sidePanel");
-const logEl = $("#log");
 const toastEl = $("#toast");
 
 let socket = null;
@@ -829,6 +830,9 @@ let subAction = null;
 let uiMode = null;
 let forgeIds = [];
 let pendingCraft = null;
+let clockTicker = null;
+let pieceDrag = null;
+let suppressBoardClickUntil = 0;
 
 function toast(msg) {
   toastEl.textContent = msg;
@@ -953,6 +957,7 @@ function bindSocket(ws) {
 
     if (msg.type === "state") {
       state = msg.state;
+      ensureClockState();
       clearTransient();
       render();
     }
@@ -1197,8 +1202,10 @@ $("#localTest").onclick = () => {
 // ---------- 게임 ----------
 function startGame() {
   showScreen("game");
+  ensureClockState();
   buildBoard();
   setupForgeDnD();
+  startClockTicker();
   render();
 }
 
@@ -1206,11 +1213,14 @@ function buildBoard() {
   boardEl.innerHTML = "";
   for (let r = 0; r < SIZE; r++) {
     for (let c = 0; c < SIZE; c++) {
-      const cell = document.createElement("button");
+      const cell = document.createElement("div");
       cell.className = "cell";
       cell.dataset.r = r;
       cell.dataset.c = c;
-      cell.onclick = (e) => cellClick(r, c, e);
+      cell.addEventListener("click", e => {
+        if (Date.now() < suppressBoardClickUntil) return;
+        cellClick(r, c, e);
+      });
       boardEl.appendChild(cell);
     }
   }
@@ -1236,14 +1246,85 @@ function sendState() {
 }
 
 function finishTurn() {
+  if (!state || state.winner) return;
+  commitActiveClock();
+  if (state.clocks[state.turn] <= 0) {
+    finishByClock();
+    return;
+  }
   subAction = null;
   selectedId = null;
   uiMode = null;
   forgeIds = [];
   pendingCraft = null;
   endTurn(state);
+  state.turnStartedAt = Date.now();
   sendState();
   render();
+}
+
+function ensureClockState() {
+  if (!state) return;
+  if (!state.clocks) state.clocks = {white:600000, black:600000};
+  if (!Number.isFinite(state.clocks.white)) state.clocks.white = 600000;
+  if (!Number.isFinite(state.clocks.black)) state.clocks.black = 600000;
+  if (!Number.isFinite(state.turnStartedAt)) state.turnStartedAt = Date.now();
+}
+
+function displayedClockMs(color) {
+  ensureClockState();
+  let ms = state.clocks[color];
+  if (!state.winner && state.turn === color) {
+    ms -= Math.max(0, Date.now() - state.turnStartedAt);
+  }
+  return Math.max(0, ms);
+}
+
+function commitActiveClock() {
+  ensureClockState();
+  if (!state || state.winner) return;
+  const color = state.turn;
+  state.clocks[color] = displayedClockMs(color);
+  state.turnStartedAt = Date.now();
+}
+
+function formatClock(ms) {
+  ms = Math.max(0, ms);
+  const totalSeconds = Math.ceil(ms / 1000);
+  const min = Math.floor(totalSeconds / 60);
+  const sec = totalSeconds % 60;
+  if (ms < 10000) {
+    const tenth = Math.floor((ms % 1000) / 100);
+    return `${min}:${String(sec).padStart(2,"0")}.${tenth}`;
+  }
+  return `${min}:${String(sec).padStart(2,"0")}`;
+}
+
+function updateClockUI() {
+  if (!state || screens.game.classList.contains("hidden")) return;
+  for (const color of ["white","black"]) {
+    const el = document.querySelector(`[data-clock="${color}"]`);
+    if (el) el.textContent = formatClock(displayedClockMs(color));
+  }
+  if (!state.winner && displayedClockMs(state.turn) <= 0 && canControlTurn()) {
+    finishByClock();
+  }
+}
+
+function finishByClock() {
+  if (!state || state.winner) return;
+  ensureClockState();
+  const loser = state.turn;
+  state.clocks[loser] = 0;
+  state.winner = other(loser);
+  state.log.push(`${loser === "white" ? "백" : "흑"} 시간 초과.`);
+  sendState();
+  render();
+}
+
+function startClockTicker() {
+  if (clockTicker) clearInterval(clockTicker);
+  clockTicker = setInterval(updateClockUI, 100);
 }
 
 function currentPiece() {
@@ -1440,7 +1521,7 @@ function setupForgeDnD() {
   const box = $("#forgeSlots");
   if (!box || box.dataset.dndReady) return;
   box.dataset.dndReady = "1";
-
+  // 데스크톱 HTML5 drop도 백업으로 유지.
   box.addEventListener("dragover", e => {
     e.preventDefault();
     box.classList.add("drag-over");
@@ -1451,9 +1532,64 @@ function setupForgeDnD() {
   box.addEventListener("drop", e => {
     e.preventDefault();
     box.classList.remove("drag-over");
-    const id = e.dataTransfer.getData("application/x-gaejam-piece") || e.dataTransfer.getData("text/plain");
-    addPieceToForge(id);
+    const id = e.dataTransfer?.getData("text/plain");
+    if (id) addPieceToForge(id);
   });
+}
+
+function beginPiecePointerDrag(e, piece, chip) {
+  if (!canControlTurn() || piece.controller !== state.turn) return;
+  if (e.button !== undefined && e.button !== 0) return;
+  pieceDrag = {
+    id: piece.id,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    active: false,
+    ghost: null,
+  };
+  try { chip.setPointerCapture(e.pointerId); } catch {}
+}
+
+function movePiecePointerDrag(e) {
+  if (!pieceDrag || e.pointerId !== pieceDrag.pointerId) return;
+  const dx = e.clientX - pieceDrag.startX;
+  const dy = e.clientY - pieceDrag.startY;
+  if (!pieceDrag.active && Math.hypot(dx,dy) > 6) {
+    pieceDrag.active = true;
+    const p = state.pieces.find(x => x.id === pieceDrag.id);
+    if (!p) return;
+    const ghost = document.createElement("div");
+    ghost.className = `drag-ghost ${p.controller}`;
+    ghost.innerHTML = pieceArt(p.type);
+    document.body.appendChild(ghost);
+    pieceDrag.ghost = ghost;
+    document.body.classList.add("piece-dragging");
+    $("#forgeSlots")?.classList.add("drag-ready");
+  }
+  if (pieceDrag.active && pieceDrag.ghost) {
+    pieceDrag.ghost.style.left = `${e.clientX}px`;
+    pieceDrag.ghost.style.top = `${e.clientY}px`;
+    const target = document.elementFromPoint(e.clientX,e.clientY);
+    $("#forgeSlots")?.classList.toggle("drag-over", !!target?.closest("#forgeSlots"));
+    e.preventDefault();
+  }
+}
+
+function endPiecePointerDrag(e) {
+  if (!pieceDrag || e.pointerId !== pieceDrag.pointerId) return;
+  const drag = pieceDrag;
+  pieceDrag = null;
+  if (drag.active) {
+    const target = document.elementFromPoint(e.clientX,e.clientY);
+    if (target?.closest("#forgeSlots")) addPieceToForge(drag.id);
+    suppressBoardClickUntil = Date.now() + 180;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  drag.ghost?.remove();
+  document.body.classList.remove("piece-dragging");
+  $("#forgeSlots")?.classList.remove("drag-over","drag-ready");
 }
 
 function addPieceToForge(id) {
@@ -1511,7 +1647,7 @@ $("#princeMode").onclick = () => {
 $("#resignButton").onclick = () => {
   if (!state || state.winner) return;
   const loser = localMode ? state.turn : myColor;
-  if (!loser || loser === "both") return;
+  if (!loser) return;
 
   if (!confirm("정말 기권할까?")) return;
   state.winner = other(loser);
@@ -1533,7 +1669,8 @@ function render() {
   $$(".cell").forEach(cell => {
     const r = +cell.dataset.r;
     const c = +cell.dataset.c;
-    cell.className = `cell ${isLand(r,c) ? "land" : "sea"} terr-${state.territory[key(r,c)]}`;
+    const tileClass = isLand(r,c) ? `land ${(r+c)%2===0 ? "land-light" : "land-dark"}` : "sea";
+    cell.className = `cell ${tileClass} terr-${state.territory[key(r,c)]}`;
     cell.innerHTML = "";
 
     const h = harborAt(state, r, c);
@@ -1551,14 +1688,12 @@ function render() {
       chip.innerHTML = pieceArt(p.type);
       chip.title = `${PIECES[p.type].name} HP ${p.hp}`;
       const draggable = canControlTurn() && p.controller === state.turn;
-      chip.draggable = draggable;
+      chip.draggable = false;
       if (draggable) {
-        chip.addEventListener("dragstart", e => {
-          e.stopPropagation();
-          e.dataTransfer.effectAllowed = "copy";
-          e.dataTransfer.setData("application/x-gaejam-piece", p.id);
-          e.dataTransfer.setData("text/plain", p.id);
-        });
+        chip.addEventListener("pointerdown", e => beginPiecePointerDrag(e,p,chip));
+        chip.addEventListener("pointermove", movePiecePointerDrag);
+        chip.addEventListener("pointerup", endPiecePointerDrag);
+        chip.addEventListener("pointercancel", endPiecePointerDrag);
       }
       cell.appendChild(chip);
 
@@ -1601,17 +1736,19 @@ function render() {
   renderPlayers();
   renderSide(selected);
   renderForge();
-  renderLog();
+  updateClockUI();
 }
 
 function renderPlayers() {
   const box = $("#gamePlayers");
   box.innerHTML = `
-    <div class="game-player-row ${state.turn === "white" ? "turn" : ""}">
-      <span>Player 1 · 백</span><span>${state.turn === "white" ? "TURN" : ""}</span>
+    <div class="game-player-card ${state.turn === "white" ? "turn" : ""}">
+      <div class="player-line"><span>Player 1</span><span>백</span></div>
+      <div class="game-clock" data-clock="white">10:00</div>
     </div>
-    <div class="game-player-row ${state.turn === "black" ? "turn" : ""}">
-      <span>Player 2 · 흑</span><span>${state.turn === "black" ? "TURN" : ""}</span>
+    <div class="game-player-card ${state.turn === "black" ? "turn" : ""}">
+      <div class="player-line"><span>Player 2</span><span>흑</span></div>
+      <div class="game-clock" data-clock="black">10:00</div>
     </div>
   `;
 }
@@ -1703,13 +1840,6 @@ function renderForge() {
   });
 
   $("#forgeCraft").disabled = !rec || !!pendingCraft;
-}
-
-function renderLog() {
-  const rows = state.log.slice().reverse();
-  logEl.innerHTML = rows
-    .map((x, i) => `<div><span>${Math.max(1, state.ply - i)}</span><span>${escapeHtml(x)}</span></div>`)
-    .join("");
 }
 
 function escapeHtml(s) {
