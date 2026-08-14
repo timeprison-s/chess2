@@ -3,35 +3,91 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>개잼체스 1.0 Alpha</title>
+  <meta name="theme-color" content="#050506">
+  <title>개잼체스 Alpha</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
   <div id="toast"></div>
 
-  <main id="lobby" class="screen card narrow">
-    <h1>개잼체스 1.0 <small>ALPHA</small></h1>
-    <p>14×14 · 중앙 육지 10×10 · 바다 2칸</p>
-    <div class="stack">
-      <button id="createRoom">온라인 방 만들기</button>
-      <div class="joinrow">
-        <input id="roomCode" maxlength="5" placeholder="방 코드">
-        <button id="joinRoom">참가</button>
+  <main id="lobby" class="lobby-screen">
+    <header class="lobby-brand">
+      <div class="brand-mark">GJ</div>
+      <div>
+        <h1>개잼체스</h1>
+        <p>ALPHA · ONLINE</p>
       </div>
-      <button id="localTest" class="secondary">로컬 테스트</button>
-    </div>
+      <div id="networkBadge" class="network-badge">
+        <span class="network-dot"></span>
+        <span id="networkText">서버 연결 중</span>
+      </div>
+    </header>
+
+    <section class="lobby-grid">
+      <article class="glass create-room-card">
+        <div class="glass-icon">＋</div>
+        <div class="eyebrow">NEW MATCH</div>
+        <h2>방 만들기</h2>
+        <p>
+          새 1대1 방을 만든다. 방이 생성되면 5자리 코드가 발급되고
+          방 목록에도 바로 표시된다.
+        </p>
+
+        <button id="createRoom" class="primary-action">
+          새 방 만들기
+        </button>
+
+        <button id="localTest" class="ghost-action">
+          로컬 테스트
+        </button>
+      </article>
+
+      <article class="glass room-list-card">
+        <div class="room-list-head">
+          <div>
+            <div class="eyebrow">ONLINE ROOMS</div>
+            <h2>방 목록</h2>
+          </div>
+          <button id="refreshRooms" class="icon-button" title="새로고침">
+            새로고침
+          </button>
+        </div>
+
+        <div id="roomList" class="room-list">
+          <div class="room-empty">
+            서버에서 방 목록을 불러오는 중…
+          </div>
+        </div>
+
+        <div class="manual-join">
+          <input id="roomCode" maxlength="5" autocomplete="off" placeholder="방 코드 5자리">
+          <button id="joinRoom">코드로 참가</button>
+        </div>
+      </article>
+    </section>
+
+    <footer class="lobby-footer">
+      <span>14×14 WORLD</span>
+      <span>10×10 LAND</span>
+      <span>2-TILE SEA</span>
+    </footer>
   </main>
 
   <section id="loadoutScreen" class="screen hidden">
-    <div class="card loadoutbox">
+    <div class="glass card loadoutbox">
       <div class="topline">
         <div>
+          <div class="eyebrow">LOADOUT</div>
           <h2>사용할 종류 6개 선택</h2>
           <p id="roomInfo" class="muted"></p>
         </div>
         <b id="loadoutCount">0 / 6</b>
       </div>
+
       <div id="loadoutChoices" class="loadout-grid"></div>
+
       <div class="topline bottomline">
         <span id="waiting" class="muted"></span>
         <button id="readyLoadout" disabled>준비 완료</button>
@@ -59,14 +115,15 @@
       <div>
         <div id="board" aria-label="개잼체스 보드"></div>
         <div class="legend">
-          <span>현재 구성:</span> <b id="turnLoadout"></b>
+          <span>현재 구성:</span>
+          <b id="turnLoadout"></b>
         </div>
       </div>
 
       <aside>
-        <div id="sidePanel" class="panel"></div>
+        <div id="sidePanel" class="panel glass"></div>
 
-        <div id="forgePanel" class="panel hidden">
+        <div id="forgePanel" class="panel glass hidden">
           <h3>연성대</h3>
           <p class="muted">연성대 모드에서 자기 기물을 클릭해 재료 선택.</p>
           <div id="forgeItems" class="forge-items">재료 없음</div>
@@ -78,7 +135,7 @@
           <p class="muted">현재 알파: 연성 결과 배치 시 1턴 소모.</p>
         </div>
 
-        <div class="panel">
+        <div class="panel glass">
           <h3>기록</h3>
           <div id="log"></div>
         </div>

@@ -1,6 +1,7 @@
-// 개잼체스 1.0 Alpha - 단일 game.js 버전
+// 개잼체스 1.0 Alpha v0.1.1
+// pieces + engine + UI/network client
 
-// ===== 기물/특성/조합 정의 =====
+// ===== 기물 / 특성 / 조합 =====
 const TRAIT_LABELS = {
   fire: "화",
   cold: "냉",
@@ -751,5 +752,584 @@ function normalizeHpAfterStateEffects(state) {
   }
 }
 
-// ===== UI / 네트워크 클라이언트 =====
+// ===== UI / 온라인 =====
+const $ = s => document.querySelector(s);
+const lobby = $("#lobby");
+const loadoutScreen = $("#loadoutScreen");
+const gameScreen = $("#gameScreen");
+const boardEl = $("#board");
+const statusEl = $("#status");
+const sideEl = $("#sidePanel");
+const logEl = $("#log");
+const toastEl = $("#toast");
 
+let socket = null;
+let roomCode = null;
+let myColor = null;
+let localMode = false;
+let state = null;
+let chosenLoadout = new Set();
+let selectedId = null;
+let actionMode = "move";
+let subAction = null; // {pieceId, moved, attacked}
+let uiMode = null; // forge | harbor | prince | hypnosis | commandLast | commandInd
+let forgeIds = [];
+let pendingCraft = null;
+
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add("show");
+  setTimeout(()=>toastEl.classList.remove("show"),1800);
+}
+
+
+let roomDirectory = [];
+let socketPromise = null;
+
+function setNetworkState(kind, text) {
+  const badge = $("#networkBadge");
+  const label = $("#networkText");
+  if (!badge || !label) return;
+  badge.classList.remove("online", "offline");
+  if (kind) badge.classList.add(kind);
+  label.textContent = text;
+}
+
+function bindSocketEvents(ws) {
+  ws.onmessage = e => {
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return toast("서버 응답 해석 실패.");
+    }
+
+    if (msg.type === "error") {
+      const createBtn = $("#createRoom");
+      if (createBtn) {
+        createBtn.disabled = false;
+        createBtn.textContent = "새 방 만들기";
+      }
+      toast(msg.message);
+      return;
+    }
+
+    if (msg.type === "room_list") {
+      roomDirectory = Array.isArray(msg.rooms) ? msg.rooms : [];
+      renderRoomDirectory();
+      return;
+    }
+
+    if (msg.type === "room_joined") {
+      myColor = msg.color;
+      roomCode = msg.room;
+
+      $("#roomInfo").textContent =
+        `방 ${roomCode} / ${myColor === "white" ? "백" : "흑"}`;
+
+      lobby.classList.add("hidden");
+      showLoadout();
+      updateRoomSnapshot(msg.snapshot);
+      return;
+    }
+
+    if (msg.type === "room_snapshot") {
+      updateRoomSnapshot(msg.snapshot);
+      return;
+    }
+
+    if (msg.type === "start_game") {
+      state = createInitialState(msg.loadouts);
+      startGame();
+      if (myColor === "white") sendState();
+      return;
+    }
+
+    if (msg.type === "state") {
+      state = msg.state;
+      clearTransient();
+      render();
+    }
+  };
+
+  ws.onclose = () => {
+    setNetworkState("offline", "연결 끊김");
+    socketPromise = null;
+    if (socket === ws) socket = null;
+  };
+
+  ws.onerror = () => {
+    setNetworkState("offline", "연결 오류");
+  };
+}
+
+function ensureSocket() {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    return Promise.resolve(socket);
+  }
+
+  if (socketPromise) return socketPromise;
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${proto}://${location.host}`;
+
+  setNetworkState("", "서버 연결 중");
+  socket = new WebSocket(url);
+  bindSocketEvents(socket);
+
+  socketPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("서버 연결 시간 초과"));
+      try { socket.close(); } catch {}
+    }, 8000);
+
+    socket.addEventListener("open", () => {
+      clearTimeout(timer);
+      setNetworkState("online", "온라인");
+      const ready = socket;
+      socketPromise = null;
+      ready.send(JSON.stringify({ type: "list_rooms" }));
+      resolve(ready);
+    }, { once: true });
+
+    socket.addEventListener("error", () => {
+      clearTimeout(timer);
+      socketPromise = null;
+      reject(new Error("WebSocket 연결 실패"));
+    }, { once: true });
+  });
+
+  return socketPromise;
+}
+
+async function sendLobbyMessage(payload) {
+  try {
+    const ws = await ensureSocket();
+    ws.send(JSON.stringify(payload));
+    return true;
+  } catch (err) {
+    console.error(err);
+    toast("서버 연결 실패. Render 서비스 상태를 확인.");
+    return false;
+  }
+}
+
+function renderRoomDirectory() {
+  const list = $("#roomList");
+  if (!list) return;
+
+  if (!roomDirectory.length) {
+    list.innerHTML = `
+      <div class="room-empty">
+        현재 열린 방이 없음.<br>
+        왼쪽에서 새 방을 만들면 된다.
+      </div>
+    `;
+    return;
+  }
+
+  list.innerHTML = "";
+
+  for (const room of roomDirectory) {
+    const item = document.createElement("div");
+    item.className = "room-item";
+
+    const info = document.createElement("div");
+    info.innerHTML = `
+      <div class="room-code">${escapeHtml(room.code)}</div>
+      <div class="room-meta">
+        플레이어 ${room.players}/2 · 준비 ${room.ready}/2
+      </div>
+    `;
+
+    const status = document.createElement("div");
+    status.className = "room-status";
+    status.textContent =
+      room.status === "waiting" ? "대기 중" :
+      room.status === "full" ? "가득 참" :
+      "게임 중";
+
+    const join = document.createElement("button");
+    join.textContent = "참가";
+    join.disabled = room.status !== "waiting";
+    join.onclick = async () => {
+      join.disabled = true;
+      const ok = await sendLobbyMessage({
+        type: "join_room",
+        room: room.code,
+      });
+      if (!ok) join.disabled = false;
+    };
+
+    item.append(info, status, join);
+    list.appendChild(item);
+  }
+}
+
+$("#createRoom").onclick = async () => {
+  const btn = $("#createRoom");
+  btn.disabled = true;
+  btn.textContent = "방 만드는 중…";
+
+  const ok = await sendLobbyMessage({ type: "create_room" });
+
+  if (!ok) {
+    btn.disabled = false;
+    btn.textContent = "새 방 만들기";
+  }
+};
+
+$("#joinRoom").onclick = async () => {
+  const room = $("#roomCode").value.trim().toUpperCase();
+  if (!room) return toast("방 코드를 입력.");
+
+  await sendLobbyMessage({
+    type: "join_room",
+    room,
+  });
+};
+
+$("#roomCode").addEventListener("keydown", e => {
+  if (e.key === "Enter") $("#joinRoom").click();
+});
+
+$("#refreshRooms").onclick = async () => {
+  await sendLobbyMessage({ type: "list_rooms" });
+};
+
+$("#localTest").onclick = () => {
+  localMode = true;
+  myColor = "both";
+  roomCode = "LOCAL";
+  lobby.classList.add("hidden");
+  showLoadout(true);
+};
+
+// 첫 화면에서 바로 서버 접속 + 방 목록 요청
+ensureSocket().catch(() => {
+  renderRoomDirectory();
+});
+
+function showLoadout(local=false) {
+  loadoutScreen.classList.remove("hidden");
+  const box=$("#loadoutChoices");
+  box.innerHTML="";
+  chosenLoadout.clear();
+  for (const [id,label] of LOADOUTS) {
+    const b=document.createElement("button");
+    b.className="loadout-card";
+    b.dataset.id=id;
+    b.innerHTML=`<strong>${label}</strong>${id==="necromancer"?"<small>능력/조합 미정</small>":""}`;
+    b.onclick=()=>{
+      if(chosenLoadout.has(id)) chosenLoadout.delete(id);
+      else if(chosenLoadout.size<6) chosenLoadout.add(id);
+      else return toast("6개까지만.");
+      refreshLoadout();
+    };
+    box.appendChild(b);
+  }
+  $("#readyLoadout").textContent=local ? "이 구성으로 로컬 시작" : "준비 완료";
+  refreshLoadout();
+}
+
+function refreshLoadout() {
+  document.querySelectorAll(".loadout-card").forEach(b=>b.classList.toggle("selected",chosenLoadout.has(b.dataset.id)));
+  $("#loadoutCount").textContent=`${chosenLoadout.size} / 6`;
+  $("#readyLoadout").disabled=chosenLoadout.size!==6;
+}
+
+$("#readyLoadout").onclick=()=>{
+  const items=[...chosenLoadout];
+  if(localMode) {
+    state=createInitialState({white:items,black:items});
+    startGame();
+  } else {
+    socket.send(JSON.stringify({type:"loadout",items}));
+    $("#readyLoadout").disabled=true;
+    $("#waiting").textContent="상대 준비 대기 중…";
+  }
+};
+
+function updateRoomSnapshot(s) {
+  if(!s) return;
+  $("#waiting").textContent=`접속 ${s.players.length}/2 · 준비 ${s.players.filter(p=>p.ready).length}/2`;
+}
+
+function startGame() {
+  loadoutScreen.classList.add("hidden");
+  gameScreen.classList.remove("hidden");
+  buildBoard();
+  render();
+}
+
+function buildBoard() {
+  boardEl.innerHTML="";
+  for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++) {
+    const cell=document.createElement("button");
+    cell.className="cell";
+    cell.dataset.r=r;cell.dataset.c=c;
+    cell.onclick=()=>cellClick(r,c);
+    boardEl.appendChild(cell);
+  }
+}
+
+function canControlTurn() {
+  return localMode || myColor===state.turn;
+}
+
+function clearTransient() {
+  selectedId=null;actionMode="move";subAction=null;uiMode=null;forgeIds=[];pendingCraft=null;
+}
+
+function sendState() {
+  if(!localMode && socket?.readyState===1) socket.send(JSON.stringify({type:"state",state}));
+}
+
+function finishTurn() {
+  subAction=null;selectedId=null;uiMode=null;forgeIds=[];pendingCraft=null;
+  endTurn(state);
+  sendState();
+  render();
+}
+
+function currentPiece() {
+  return state?.pieces.find(p=>p.id===selectedId) || null;
+}
+
+function cellClick(r,c) {
+  if(!state || state.winner || !canControlTurn()) return;
+
+  if(pendingCraft) {
+    if(canPlaceCraft(state,state.turn,pendingCraft,r,c)) {
+      const res=placeCraft(state,state.turn,pendingCraft,r,c);
+      if(res.ok) {
+        consumePieces(state,forgeIds);
+        finishTurn();
+      }
+    } else toast("여기에는 배치 못 함.");
+    return;
+  }
+
+  if(uiMode==="harbor") {
+    const res=installHarbor(state,state.turn,r,c);
+    if(res.ok) finishTurn(); else toast(res.msg);
+    return;
+  }
+
+  const clicked=at(state,r,c);
+
+  if(uiMode==="forge") {
+    if(clicked && clicked.controller===state.turn) {
+      if(forgeIds.includes(clicked.id)) forgeIds=forgeIds.filter(x=>x!==clicked.id);
+      else forgeIds.push(clicked.id);
+      render();
+    }
+    return;
+  }
+
+  if(uiMode==="prince") {
+    const res=appointPrince(state,clicked);
+    if(res.ok) finishTurn(); else toast(res.msg);
+    return;
+  }
+
+  if(uiMode==="hypnosis") {
+    const caster=currentPiece();
+    const res=applyHypnosis(state,caster,clicked);
+    if(res.ok) finishTurn(); else toast(res.msg);
+    return;
+  }
+
+  if(uiMode==="commandLast" || uiMode==="commandInd") {
+    const cmd=currentPiece();
+    const res=applyCommand(state,cmd,clicked,uiMode==="commandLast"?"lastStand":"indiscriminate");
+    if(res.ok) { uiMode=null; render(); sendState(); } else toast(res.msg);
+    return; // 지휘는 턴 소모 X
+  }
+
+  const sel=currentPiece();
+  if(!sel) {
+    if(clicked && canAct(state,clicked,state.turn)) {
+      selectedId=clicked.id;actionMode="move";subAction=null;render();
+    }
+    return;
+  }
+
+  if(clicked && clicked.id===sel.id) {
+    if (subAction) return;
+    selectedId=null;render();return;
+  }
+
+  // 다른 자기 통제 기물 선택
+  if(clicked && canAct(state,clicked,state.turn) && !subAction) {
+    selectedId=clicked.id;actionMode="move";render();return;
+  }
+
+  if(isOverwhelmed(state,sel) && actionMode==="attack") return toast("압도: 공격 불가.");
+
+  if(actionMode==="move") {
+    const res=movePiece(state,sel,r,c,state.turn);
+    if(!res.ok) return toast(res.msg);
+    handleActionContinuation(sel,"move");
+  } else {
+    const res=attackPoint(state,sel,r,c,state.turn);
+    if(!res.ok) return toast(res.msg);
+    handleActionContinuation(sel,"attack");
+  }
+}
+
+function handleActionContinuation(piece,kind) {
+  const still=state.pieces.find(p=>p.id===piece.id);
+  if(!still) return finishTurn();
+  const traits=effectiveTraits(state,still);
+
+  if(traits.includes("breakthrough")) {
+    subAction = subAction || {pieceId:still.id,moved:false,attacked:false};
+    if(kind==="move") subAction.moved=true;
+    if(kind==="attack") subAction.attacked=true;
+    if(subAction.moved && subAction.attacked) return finishTurn();
+    actionMode = subAction.moved ? "attack" : "move";
+    selectedId=still.id;render();sendState();return;
+  }
+
+  if(traits.includes("mobility") && kind==="move") {
+    subAction={pieceId:still.id,moved:true,attacked:false};
+    actionMode="move";
+    selectedId=still.id;
+    render();sendState();return;
+  }
+
+  finishTurn();
+}
+
+$("#endAction").onclick=()=>{ if(state && subAction && canControlTurn()) finishTurn(); };
+$("#moveMode").onclick=()=>{actionMode="move";uiMode=null;render();};
+$("#attackMode").onclick=()=>{actionMode="attack";uiMode=null;render();};
+
+$("#forgeMode").onclick=()=>{
+  if(!state||!canControlTurn())return;
+  uiMode=uiMode==="forge"?null:"forge";forgeIds=[];pendingCraft=null;render();
+};
+$("#forgeReset").onclick=()=>{forgeIds=[];pendingCraft=null;render();};
+$("#forgeCraft").onclick=()=>{
+  if(!state||!forgeIds.length)return;
+  const pieces=forgeIds.map(id=>state.pieces.find(p=>p.id===id)).filter(Boolean);
+  if(pieces.some(p=>p.controller!==state.turn)) return toast("자기 기물만 재료 가능.");
+  const rec=recipeFor(pieces.map(p=>p.type),state.loadouts[state.turn]||[]);
+  if(!rec) return toast("현재 선택 구성으로 가능한 조합이 아님.");
+  pendingCraft=rec.result;
+  toast(`${PIECES[rec.result].name} 배치 위치를 선택.`);
+  render();
+};
+
+$("#harborMode").onclick=()=>{
+  if(!state||!canControlTurn())return;
+  if(!state.loadouts[state.turn]?.includes("fleet_tree")) return toast("함대류를 선택하지 않음.");
+  if(state.portsPlaced[state.turn]>=3) return toast("항구는 최대 3개.");
+  uiMode="harbor";render();
+};
+$("#princeMode").onclick=()=>{
+  if(!state||!canControlTurn())return;
+  if(!canAppointPrince(state,state.turn)) return toast("왕 사망 후 4턴이 지나야 함.");
+  uiMode="prince";render();
+};
+
+function render() {
+  if(!state)return;
+  const viewer=localMode?state.turn:myColor;
+  document.body.dataset.turn=state.turn;
+  statusEl.innerHTML = state.winner
+    ? `<b>${state.winner==="white"?"백":"흑"} 승리</b> — 육지 전체 지배`
+    : `<b>${state.turn==="white"?"백":"흑"} 차례</b> · 수 ${state.ply+1} · 백 ${state.ownTurns.white}턴 / 흑 ${state.ownTurns.black}턴`;
+
+  const selected=currentPiece();
+  document.querySelectorAll(".cell").forEach(cell=>{
+    const r=+cell.dataset.r,c=+cell.dataset.c;
+    cell.className=`cell ${isLand(r,c)?"land":"sea"} terr-${state.territory[key(r,c)]}`;
+    cell.innerHTML="";
+
+    const h=harborAt(state,r,c);
+    if(h) {
+      const port=document.createElement("span");
+      port.className=`harbor ${h.color}`;
+      port.textContent="항";
+      cell.appendChild(port);
+    }
+
+    const p=at(state,r,c);
+    if(p && isVisibleTo(state,p,viewer)) {
+      const chip=document.createElement("span");
+      chip.className=`piece ${p.controller} ${p.prince?"prince":""}`;
+      chip.textContent=PIECES[p.type].symbol;
+      chip.title=`${PIECES[p.type].name} HP ${p.hp}`;
+      cell.appendChild(chip);
+      if(p.hp!==maxHp(p,state)) {
+        const hp=document.createElement("small");
+        hp.className="hp";hp.textContent=p.hp;
+        cell.appendChild(hp);
+      }
+    }
+
+    if(selected && selected.id===p?.id) cell.classList.add("selected-piece");
+    if(forgeIds.includes(p?.id)) cell.classList.add("forge-selected");
+
+    if(selected && !uiMode && canControlTurn()) {
+      if(actionMode==="move" && canMove(state,selected,r,c,state.turn)) cell.classList.add("legal-move");
+      if(actionMode==="attack" && canAttackPoint(state,selected,r,c,state.turn)) cell.classList.add("legal-attack");
+    }
+    if(uiMode==="harbor" && canInstallHarbor(state,state.turn,r,c)) cell.classList.add("legal-harbor");
+    if(pendingCraft && canPlaceCraft(state,state.turn,pendingCraft,r,c)) cell.classList.add("legal-craft");
+  });
+
+  $("#moveMode").classList.toggle("active",actionMode==="move");
+  $("#attackMode").classList.toggle("active",actionMode==="attack");
+  $("#endAction").classList.toggle("hidden",!subAction);
+  $("#forgePanel").classList.toggle("hidden",uiMode!=="forge" && !pendingCraft);
+
+  const load=state.loadouts[state.turn]||[];
+  $("#turnLoadout").textContent=load.map(x=>LOADOUTS.find(y=>y[0]===x)?.[1]||x).join(" · ");
+  $("#harborCount").textContent=`${state.portsPlaced[state.turn]}/3`;
+
+  renderSide(selected);
+  renderForge();
+  logEl.innerHTML=state.log.slice().reverse().map(x=>`<div>${escapeHtml(x)}</div>`).join("");
+}
+
+function renderSide(p) {
+  if(!p) {
+    sideEl.innerHTML=`<h3>기물 정보</h3><p class="muted">기물을 클릭.</p>`;
+    return;
+  }
+  const d=pieceDef(p);
+  const confused=isConfused(state,p);
+  const tr=confused?["혼란"]:traitNames(effectiveTraits(state,p));
+  sideEl.innerHTML=`
+    <h3>${d.name}${p.prince?" · 왕자":""}</h3>
+    <div class="statrow"><span>체력</span><b>${p.hp} / ${maxHp(p,state)}</b></div>
+    <div class="statrow"><span>공격력</span><b>${attackPower(state,p)}</b></div>
+    <div class="tags">${tr.length?tr.map(x=>`<span>${x}</span>`).join(""):"<span>특성 없음</span>"}</div>
+    <p class="muted">${p.synthetic?"합성 기물":"기본 기물"} · ${d.naval?"해상":"지상"}</p>
+    ${p.cooldownUntilOwnTurn>state.ownTurns[p.color]?`<p class="danger">폭주 쿨다운</p>`:""}
+    ${isOverwhelmed(state,p)?`<p class="danger">압도 상태: 공격 불가</p>`:""}
+    <div id="abilityButtons"></div>
+  `;
+  const ab=$("#abilityButtons");
+  if(p.type==="hypnotist" && p.controller===state.turn && !confused) {
+    const b=document.createElement("button");b.textContent="최면 사용";b.onclick=()=>{uiMode="hypnosis";render();};ab.appendChild(b);
+  }
+  if(p.type==="commander" && p.controller===state.turn && !confused) {
+    const a=document.createElement("button");a.textContent="최후의 저항";a.onclick=()=>{uiMode="commandLast";render();};
+    const b=document.createElement("button");b.textContent="무차별 공격";b.onclick=()=>{uiMode="commandInd";render();};
+    ab.append(a,b);
+  }
+}
+
+function renderForge() {
+  const names=forgeIds.map(id=>state.pieces.find(p=>p.id===id)).filter(Boolean).map(p=>PIECES[p.type].name);
+  $("#forgeItems").textContent=names.length?names.join(" + "):"재료 없음";
+  const rec=recipeFor(forgeIds.map(id=>state.pieces.find(p=>p.id===id)?.type).filter(Boolean),state.loadouts[state.turn]||[]);
+  $("#forgeResult").textContent=pendingCraft?`배치 대기: ${PIECES[pendingCraft].name}`:(rec?`결과: ${PIECES[rec.result].name}`:"결과: -");
+  $("#forgeCraft").disabled=!rec || !!pendingCraft;
+}
+
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));}
