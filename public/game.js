@@ -689,24 +689,46 @@ function installHarbor(state,color,r,c) {
   return {ok:true};
 }
 
-function canPlaceCraft(state,color,type,r,c) {
-  const d=PIECES[type];
+function canPlaceCraft(state,color,type,r,c,options={}) {
+  const d = PIECES[type];
   if (!d) return false;
-  if (at(state,r,c)) return false;
+
+  const ignoreIds = new Set(options.ignoreIds || []);
+  const occupant = at(state,r,c);
+  const occupiedByNonMaterial = occupant && !ignoreIds.has(occupant.id);
+  if (occupiedByNonMaterial) return false;
+
   if (d.naval) {
-    if (!isSea(r,c) || state.territory[key(r,c)]!==color) return false;
+    if (!isSea(r,c)) return false;
+
+    // 잠수함/전함/초중전함/항모는 재료 계보에 포함된 함대 틀 위치에도 배치 가능.
+    const frameOrigins = options.frameOrigins || [];
+    const frameOriginAllowed =
+      ["submarine","battleship","superBattleship","carrier"].includes(type) &&
+      frameOrigins.some(o => o.r === r && o.c === c);
+
+    if (frameOriginAllowed) return true;
+
+    if (state.territory[key(r,c)] !== color) return false;
     return state.harbors.some(h =>
       h.color===color &&
       Math.abs(h.r-r)+Math.abs(h.c-c)===1
     );
   }
+
   return isLand(r,c) && state.territory[key(r,c)]===color;
 }
 
-function placeCraft(state,color,type,r,c) {
-  if (!canPlaceCraft(state,color,type,r,c)) return {ok:false,msg:"배치 불가"};
+function placeCraft(state,color,type,r,c,options={}) {
+  if (!canPlaceCraft(state,color,type,r,c,options)) return {ok:false,msg:"배치 불가"};
   const p=makePiece(type,color,r,c);
   p.synthetic=true;
+
+  // 함선은 자신을 만들 때 포함된 틀들의 위치 계보를 이어받는다.
+  if (PIECES[type]?.naval) {
+    p.frameOrigins = (options.frameOrigins || []).map(o => ({r:o.r,c:o.c}));
+  }
+
   state.pieces.push(p);
   addLog(state, `${PIECES[type].name} 배치.`);
   return {ok:true,piece:p};
@@ -845,7 +867,9 @@ let selectedId = null;
 let subAction = null;
 let uiMode = null;
 let forgeIds = [];
+let forgeSlotIds = Array(9).fill(null);
 let pendingCraft = null;
+let pendingCraftOrigins = [];
 let clockTicker = null;
 let pieceDrag = null;
 let suppressBoardClickUntil = 0;
@@ -1265,7 +1289,9 @@ function clearTransient() {
   subAction = null;
   uiMode = null;
   forgeIds = [];
+  forgeSlotIds = Array(9).fill(null);
   pendingCraft = null;
+  pendingCraftOrigins = [];
 }
 
 function sendState() {
@@ -1419,10 +1445,26 @@ function cellClick(r, c, event) {
   closeActionChooser();
 
   if (pendingCraft) {
-    if (canPlaceCraft(state, state.turn, pendingCraft, r, c)) {
-      const res = placeCraft(state, state.turn, pendingCraft, r, c);
+    const craftOptions = {
+      ignoreIds: forgeIds,
+      frameOrigins: pendingCraftOrigins,
+    };
+
+    if (canPlaceCraft(state, state.turn, pendingCraft, r, c, craftOptions)) {
+      // 완성품을 먼저 추가하고 재료를 제거하면 같은 칸의 재료와 충돌하므로
+      // 재료 제거 후 완성품 배치. 검증은 ignoreIds로 이미 끝낸 상태.
+      const materialIds = [...forgeIds];
+      consumePieces(state, materialIds);
+
+      const res = placeCraft(state, state.turn, pendingCraft, r, c, {
+        frameOrigins: pendingCraftOrigins
+      });
+
       if (res.ok) {
-        consumePieces(state, forgeIds);
+        forgeIds = [];
+        forgeSlotIds = Array(9).fill(null);
+        pendingCraft = null;
+        pendingCraftOrigins = [];
         finishTurn();
       }
     } else toast("여기에는 배치 못 함.");
@@ -1546,23 +1588,141 @@ $("#forgeFocusButton").onclick = () => {
 };
 
 
+
+function syncForgeIdsFromSlots() {
+  forgeIds = forgeSlotIds.filter(Boolean);
+}
+
+function cleanupForgeSlots() {
+  if (!state) {
+    forgeSlotIds = Array(9).fill(null);
+    forgeIds = [];
+    return;
+  }
+  forgeSlotIds = forgeSlotIds.map(pid =>
+    pid && state.pieces.some(p => p.id === pid) ? pid : null
+  );
+  syncForgeIdsFromSlots();
+}
+
+function firstEmptyForgeSlot() {
+  return forgeSlotIds.findIndex(x => !x);
+}
+
+function forgeMaterials() {
+  cleanupForgeSlots();
+  return forgeSlotIds
+    .filter(Boolean)
+    .map(pid => state.pieces.find(p => p.id === pid))
+    .filter(Boolean);
+}
+
+function materialFrameOrigins(materials) {
+  const list = [];
+  for (const p of materials) {
+    if (p.type === "fleetFrame") list.push({r:p.r,c:p.c});
+    for (const o of (p.frameOrigins || [])) list.push({r:o.r,c:o.c});
+  }
+  const seen = new Set();
+  return list.filter(o => {
+    const k = `${o.r},${o.c}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+function addPieceToForgeSlot(id, slotIndex = null) {
+  if (!state || !canControlTurn()) return false;
+  const p = state.pieces.find(x => x.id === id);
+  if (!p || p.controller !== state.turn) {
+    toast("현재 자기 기물만 연성대에 넣을 수 있음.");
+    return false;
+  }
+
+  if (forgeSlotIds.includes(id)) {
+    toast("이미 연성대에 있음.");
+    return false;
+  }
+
+  let idx = Number.isInteger(slotIndex) ? slotIndex : firstEmptyForgeSlot();
+  if (idx < 0 || idx > 8) {
+    toast("연성대가 가득 참.");
+    return false;
+  }
+
+  // 지정 슬롯이 차 있으면 가장 가까운 빈 슬롯 사용
+  if (forgeSlotIds[idx]) {
+    const fallback = firstEmptyForgeSlot();
+    if (fallback < 0) {
+      toast("연성대가 가득 참.");
+      return false;
+    }
+    idx = fallback;
+  }
+
+  forgeSlotIds[idx] = id;
+  syncForgeIdsFromSlots();
+  pendingCraft = null;
+  pendingCraftOrigins = [];
+  render();
+  return true;
+}
+
+function removeForgeSlot(index) {
+  if (index < 0 || index > 8) return;
+  forgeSlotIds[index] = null;
+  syncForgeIdsFromSlots();
+  pendingCraft = null;
+  pendingCraftOrigins = [];
+  render();
+}
+
 function setupForgeDnD() {
   const box = $("#forgeSlots");
   if (!box || box.dataset.dndReady) return;
   box.dataset.dndReady = "1";
-  // 데스크톱 HTML5 drop도 백업으로 유지.
+
+  const slots = [...box.children];
+  slots.forEach((slot, index) => {
+    slot.dataset.forgeSlot = String(index);
+
+    slot.addEventListener("dragover", e => {
+      e.preventDefault();
+      slot.classList.add("slot-drag-over");
+      box.classList.add("drag-over");
+    });
+
+    slot.addEventListener("dragleave", () => {
+      slot.classList.remove("slot-drag-over");
+    });
+
+    slot.addEventListener("drop", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      slot.classList.remove("slot-drag-over");
+      box.classList.remove("drag-over");
+      const pid = e.dataTransfer?.getData("text/plain");
+      if (pid) addPieceToForgeSlot(pid, index);
+    });
+  });
+
+  // 슬롯 사이 여백에 떨어져도 빈 첫 칸으로 들어감.
   box.addEventListener("dragover", e => {
     e.preventDefault();
     box.classList.add("drag-over");
   });
   box.addEventListener("dragleave", e => {
-    if (!box.contains(e.relatedTarget)) box.classList.remove("drag-over");
+    if (!box.contains(e.relatedTarget)) {
+      box.classList.remove("drag-over");
+      slots.forEach(s => s.classList.remove("slot-drag-over"));
+    }
   });
   box.addEventListener("drop", e => {
     e.preventDefault();
     box.classList.remove("drag-over");
-    const id = e.dataTransfer?.getData("text/plain");
-    if (id) addPieceToForge(id);
+    const pid = e.dataTransfer?.getData("text/plain");
+    if (pid) addPieceToForgeSlot(pid);
   });
 }
 
@@ -1611,16 +1771,27 @@ function endPiecePointerDrag(e) {
   if (!pieceDrag || e.pointerId !== pieceDrag.pointerId) return;
   const drag = pieceDrag;
   pieceDrag = null;
+
   if (drag.active) {
     const target = document.elementFromPoint(e.clientX,e.clientY);
-    if (target?.closest("#forgeSlots")) addPieceToForge(drag.id);
-    suppressBoardClickUntil = Date.now() + 180;
+    const slot = target?.closest?.("[data-forge-slot]");
+    const forge = target?.closest?.("#forgeSlots");
+
+    if (slot) {
+      addPieceToForgeSlot(drag.id, Number(slot.dataset.forgeSlot));
+    } else if (forge) {
+      addPieceToForgeSlot(drag.id);
+    }
+
+    suppressBoardClickUntil = Date.now() + 220;
     e.preventDefault();
     e.stopPropagation();
   }
+
   drag.ghost?.remove();
   document.body.classList.remove("piece-dragging");
   $("#forgeSlots")?.classList.remove("drag-over","drag-ready");
+  $$("#forgeSlots > div").forEach(s => s.classList.remove("slot-drag-over"));
 }
 
 // 드래그 중 포인터가 원래 기물 밖으로 나가도 계속 추적한다.
@@ -1629,26 +1800,22 @@ window.addEventListener("pointerup", endPiecePointerDrag, {passive:false});
 window.addEventListener("pointercancel", endPiecePointerDrag, {passive:false});
 
 function addPieceToForge(id) {
-  if (!state || !canControlTurn()) return;
-  const p = state.pieces.find(x => x.id === id);
-  if (!p || p.controller !== state.turn) return toast("현재 자기 기물만 연성대에 넣을 수 있음.");
-  if (forgeIds.includes(id)) return toast("이미 연성대에 있음.");
-  if (forgeIds.length >= 9) return toast("연성대가 가득 참.");
-  forgeIds.push(id);
-  pendingCraft = null;
-  render();
+  return addPieceToForgeSlot(id);
 }
 
 $("#forgeReset").onclick = () => {
   forgeIds = [];
+  forgeSlotIds = Array(9).fill(null);
   pendingCraft = null;
+  pendingCraftOrigins = [];
   render();
 };
 
 $("#forgeCraft").onclick = () => {
-  if (!state || !forgeIds.length) return;
+  if (!state) return;
 
-  const pieces = forgeIds.map(id => state.pieces.find(p => p.id === id)).filter(Boolean);
+  const pieces = forgeMaterials();
+  if (!pieces.length) return;
   if (pieces.some(p => p.controller !== state.turn)) return toast("자기 기물만 재료 가능.");
 
   const rec = recipeFor(
@@ -1659,6 +1826,7 @@ $("#forgeCraft").onclick = () => {
   if (!rec) return toast("가능한 조합이 아님.");
 
   pendingCraft = rec.result;
+  pendingCraftOrigins = materialFrameOrigins(pieces);
   toast(`${PIECES[rec.result].name} 배치 위치를 선택.`);
   render();
 };
@@ -1702,8 +1870,13 @@ const selected = currentPiece();
     const r = +cell.dataset.r;
     const c = +cell.dataset.c;
     const tileClass = isLand(r,c) ? `land ${(r+c)%2===0 ? "land-light" : "land-dark"}` : "sea";
-    cell.className = `cell ${tileClass} terr-${state.territory[key(r,c)]}`;
+    const territoryOwner = state.territory[key(r,c)];
+    cell.className = `cell ${tileClass} terr-${territoryOwner}`;
     cell.innerHTML = "";
+
+    const territoryFrame = document.createElement("span");
+    territoryFrame.className = `territory-frame ${territoryOwner}`;
+    cell.appendChild(territoryFrame);
 
     const h = harborAt(state, r, c);
     if (h) {
@@ -1748,16 +1921,48 @@ const selected = currentPiece();
       const allowed = allowedActionsFor(selected);
       const lm = allowed.move && canMove(state, selected, r, c, state.turn);
       const la = allowed.attack && !isOverwhelmed(state, selected) && canAttackPoint(state, selected, r, c, state.turn);
-      if (lm && la) cell.classList.add("legal-both");
-      else if (lm) cell.classList.add("legal-move");
-      else if (la) cell.classList.add("legal-attack");
+
+      if (lm || la) {
+        if (la && p) {
+          const marker = document.createElement("span");
+          marker.className = "capture-marker";
+          cell.appendChild(marker);
+          cell.classList.add(lm ? "legal-both" : "legal-attack");
+        } else if (lm && !la) {
+          const marker = document.createElement("span");
+          marker.className = "move-marker";
+          cell.appendChild(marker);
+          cell.classList.add("legal-move");
+        } else if (la && !p && !lm) {
+          // 포격처럼 빈 칸 자체를 공격할 수 있는 특수 공격.
+          const marker = document.createElement("span");
+          marker.className = "attack-point-marker";
+          cell.appendChild(marker);
+          cell.classList.add("legal-attack");
+        } else {
+          // 빈 칸에서 이동/공격이 겹치는 경우: 작은 점 + 얇은 외곽 원
+          const moveMarker = document.createElement("span");
+          moveMarker.className = "move-marker";
+          const attackMarker = document.createElement("span");
+          attackMarker.className = "attack-point-marker";
+          cell.append(moveMarker, attackMarker);
+          cell.classList.add("legal-both");
+        }
+      }
     }
 
     if (uiMode === "harbor" && canInstallHarbor(state, state.turn, r, c)) {
       cell.classList.add("legal-harbor");
     }
-    if (pendingCraft && canPlaceCraft(state, state.turn, pendingCraft, r, c)) {
-      cell.classList.add("legal-craft");
+    if (pendingCraft && canPlaceCraft(state, state.turn, pendingCraft, r, c, {
+      ignoreIds: forgeIds,
+      frameOrigins: pendingCraftOrigins
+    })) {
+      cell.classList.add(
+        pendingCraftOrigins.some(o => o.r === r && o.c === c)
+          ? "legal-craft-origin"
+          : "legal-craft"
+      );
     }
   });
   $("#endAction").classList.toggle("hidden", !subAction);
@@ -1834,50 +2039,57 @@ function renderSide(p) {
 
 
 function renderForge() {
-  const selectedPieces = forgeIds
-    .map(id => state.pieces.find(p => p.id === id))
-    .filter(Boolean);
+  cleanupForgeSlots();
 
-  // 죽었거나 보드에서 사라진 재료는 자동 제거
-  forgeIds = selectedPieces.map(p => p.id);
-
+  const selectedPieces = forgeMaterials();
   const names = selectedPieces.map(p => PIECES[p.type].name);
-  $("#forgeItems").textContent = names.length ? names.join(" + ") : "기물을 보드에서 이곳으로 드래그";
+  $("#forgeItems").textContent =
+    names.length ? names.join(" + ") : "기물을 보드에서 슬롯으로 드래그";
 
-  const rec = recipeFor(selectedPieces.map(p => p.type), state.loadouts[state.turn] || []);
-
-  $("#forgeResult").textContent = pendingCraft
-    ? `배치 대기: ${PIECES[pendingCraft].name}`
-    : rec ? `결과: ${PIECES[rec.result].name}` : "결과: -";
+  const rec = recipeFor(
+    selectedPieces.map(p => p.type),
+    state.loadouts[state.turn] || []
+  );
 
   const out = $("#forgeOutput");
-  out.innerHTML = pendingCraft
-    ? pieceArt(pendingCraft)
-    : rec ? pieceArt(rec.result) : "?";
+
+  if (pendingCraft) {
+    $("#forgeResult").textContent = `배치 대기: ${PIECES[pendingCraft].name}`;
+    out.innerHTML = `<span class="forge-output-piece ${state.turn}">${pieceArt(pendingCraft)}</span>`;
+  } else if (rec) {
+    $("#forgeResult").textContent = `결과: ${PIECES[rec.result].name}`;
+    out.innerHTML = `<span class="forge-output-piece ${state.turn}">${pieceArt(rec.result)}</span>`;
+  } else {
+    $("#forgeResult").textContent = selectedPieces.length ? "결과: 조합 없음" : "결과: -";
+    out.textContent = "?";
+  }
 
   const slots = $$("#forgeSlots > div");
-  slots.forEach((slot, i) => {
+  slots.forEach((slot, index) => {
+    slot.dataset.forgeSlot = String(index);
     slot.innerHTML = "";
-    slot.classList.toggle("filled", i < selectedPieces.length);
     slot.classList.add("drop-ready");
-    const p = selectedPieces[i];
+
+    const pid = forgeSlotIds[index];
+    const p = pid ? state.pieces.find(x => x.id === pid) : null;
+    slot.classList.toggle("filled", !!p);
+
     if (!p) return;
+
     const icon = document.createElement("span");
     icon.className = `forge-slot-piece ${p.controller}`;
     icon.innerHTML = pieceArt(p.type);
     icon.title = `${PIECES[p.type].name} · 클릭하면 연성대에서 제거`;
     icon.addEventListener("click", e => {
       e.stopPropagation();
-      forgeIds = forgeIds.filter(id => id !== p.id);
-      pendingCraft = null;
-      render();
+      removeForgeSlot(index);
     });
+
     slot.appendChild(icon);
   });
 
   $("#forgeCraft").disabled = !rec || !!pendingCraft;
 }
-
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, m => ({
     "&": "&amp;",

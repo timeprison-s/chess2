@@ -551,34 +551,11 @@ input:focus { border-color: var(--line-strong); }
   overflow: hidden;
   cursor:pointer;
 }
-.cell.land-light { background:#dedede; }
-.cell.land-dark { background:#171717; }
+.cell.land-light { background:#d9c8a5; }
+.cell.land-dark { background:#56604f; }
 .cell.sea {
   background:#020202;
   border:1px solid rgba(255,255,255,.62);
-}
-.cell.terr-white::before,
-.cell.terr-black::before,
-.cell.terr-neutral::before {
-  content:"";
-  position:absolute;
-  inset:0;
-  pointer-events:none;
-  z-index:1;
-  border:3px solid var(--control-color);
-  background:var(--control-wash);
-}
-.cell.terr-white {
-  --control-color:rgba(255,255,255,.82);
-  --control-wash:rgba(255,255,255,.045);
-}
-.cell.terr-neutral {
-  --control-color:rgba(128,132,138,.70);
-  --control-wash:rgba(120,124,130,.025);
-}
-.cell.terr-black {
-  --control-color:rgba(5,6,8,.90);
-  --control-wash:rgba(0,0,0,.075);
 }
 .piece {
   position: relative;
@@ -844,3 +821,162 @@ input:focus { border-color: var(--line-strong); }
 .drag-ghost.black { color:#111419; }
 .drag-ghost .piece-art { width:100%;height:100%; }
 body.piece-dragging { cursor:grabbing; }
+
+
+/* 지배권: 칸 전체 글로우 대신 네 모서리에 얇은 브래킷만 표시 */
+.territory-frame {
+  position:absolute;
+  inset:4px;
+  z-index:1;
+  pointer-events:none;
+  opacity:.82;
+  --tc:#999;
+  background:
+    linear-gradient(var(--tc),var(--tc)) left top / 12px 2px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) left top / 2px 12px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) right top / 12px 2px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) right top / 2px 12px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) left bottom / 12px 2px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) left bottom / 2px 12px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) right bottom / 12px 2px no-repeat,
+    linear-gradient(var(--tc),var(--tc)) right bottom / 2px 12px no-repeat;
+}
+.territory-frame.white {
+  --tc:rgba(255,250,240,.94);
+}
+.territory-frame.neutral {
+  --tc:rgba(161,164,160,.86);
+}
+.territory-frame.black {
+  --tc:rgba(18,20,21,.94);
+  filter:drop-shadow(0 0 1px rgba(255,255,255,.22));
+}
+
+/* Chess.com 계열의 감각: 빈 이동칸은 작은 점, 잡을 수 있는 기물은 큰 링 */
+.move-marker,
+.capture-marker,
+.attack-point-marker {
+  position:absolute;
+  inset:0;
+  z-index:8;
+  pointer-events:none;
+}
+.move-marker::after {
+  content:"";
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:27%;
+  aspect-ratio:1;
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  background:rgba(17,22,18,.28);
+}
+.cell.land-dark .move-marker::after,
+.cell.sea .move-marker::after {
+  background:rgba(235,239,232,.25);
+}
+.capture-marker::after {
+  content:"";
+  position:absolute;
+  inset:7%;
+  border-radius:50%;
+  border:7px solid rgba(18,23,19,.27);
+}
+.cell.land-dark .capture-marker::after,
+.cell.sea .capture-marker::after {
+  border-color:rgba(239,242,237,.25);
+}
+.attack-point-marker::after {
+  content:"";
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:35%;
+  aspect-ratio:1;
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  border:3px solid rgba(18,23,19,.30);
+}
+.cell.land-dark .attack-point-marker::after,
+.cell.sea .attack-point-marker::after {
+  border-color:rgba(239,242,237,.27);
+}
+
+/* 예전 문자/box-shadow legal 표시 완전 무력화 */
+.cell.legal-move::after,
+.cell.legal-attack::after,
+.cell.legal-both::after,
+.cell.legal-both::before {
+  content:none !important;
+  display:none !important;
+}
+
+
+/* 합성 슬롯은 내용물 크기와 무관하게 절대 늘어나지 않음 */
+.forge-slots {
+  grid-template-columns:repeat(3,60px) !important;
+  grid-template-rows:repeat(3,60px) !important;
+  width:180px !important;
+  height:180px !important;
+  min-width:180px !important;
+  min-height:180px !important;
+  max-width:180px !important;
+  max-height:180px !important;
+  overflow:hidden !important;
+}
+.forge-slots > div {
+  box-sizing:border-box !important;
+  width:60px !important;
+  height:60px !important;
+  min-width:60px !important;
+  min-height:60px !important;
+  max-width:60px !important;
+  max-height:60px !important;
+  overflow:hidden !important;
+  contain:size layout paint;
+}
+.forge-slot-piece {
+  display:grid !important;
+  place-items:center !important;
+  width:52px !important;
+  height:52px !important;
+  min-width:52px !important;
+  min-height:52px !important;
+  max-width:52px !important;
+  max-height:52px !important;
+  overflow:hidden !important;
+}
+.forge-slot-piece .piece-art,
+.forge-slot-piece svg {
+  display:block !important;
+  width:50px !important;
+  height:50px !important;
+  max-width:50px !important;
+  max-height:50px !important;
+}
+.forge-slots > div.slot-drag-over {
+  background:rgba(255,255,255,.12) !important;
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.46);
+}
+.forge-output-piece {
+  display:grid;
+  place-items:center;
+  width:48px;
+  height:48px;
+}
+.forge-output-piece .piece-art,
+.forge-output-piece svg {
+  width:46px !important;
+  height:46px !important;
+}
+
+/* 일반 배치 가능 위치와 '포함된 틀의 위치'를 구분 */
+.cell.legal-craft {
+  box-shadow:inset 0 0 0 3px rgba(194,212,186,.70);
+}
+.cell.legal-craft-origin {
+  box-shadow:
+    inset 0 0 0 3px rgba(231,220,178,.88),
+    inset 0 0 0 6px rgba(231,220,178,.15);
+}
