@@ -1564,6 +1564,8 @@ function movePiecePointerDrag(e) {
     ghost.innerHTML = pieceArt(p.type);
     document.body.appendChild(ghost);
     pieceDrag.ghost = ghost;
+    ghost.style.left = `${e.clientX}px`;
+    ghost.style.top = `${e.clientY}px`;
     document.body.classList.add("piece-dragging");
     $("#forgeSlots")?.classList.add("drag-ready");
   }
@@ -1591,6 +1593,11 @@ function endPiecePointerDrag(e) {
   document.body.classList.remove("piece-dragging");
   $("#forgeSlots")?.classList.remove("drag-over","drag-ready");
 }
+
+// 드래그 중 포인터가 원래 기물 밖으로 나가도 계속 추적한다.
+window.addEventListener("pointermove", movePiecePointerDrag, {passive:false});
+window.addEventListener("pointerup", endPiecePointerDrag, {passive:false});
+window.addEventListener("pointercancel", endPiecePointerDrag, {passive:false});
 
 function addPieceToForge(id) {
   if (!state || !canControlTurn()) return;
@@ -1691,9 +1698,6 @@ function render() {
       chip.draggable = false;
       if (draggable) {
         chip.addEventListener("pointerdown", e => beginPiecePointerDrag(e,p,chip));
-        chip.addEventListener("pointermove", movePiecePointerDrag);
-        chip.addEventListener("pointerup", endPiecePointerDrag);
-        chip.addEventListener("pointercancel", endPiecePointerDrag);
       }
       cell.appendChild(chip);
 
