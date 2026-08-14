@@ -1,859 +1,755 @@
-let socket=null,myColor=null,roomCode=null,boardState=null,control=null,seaState={},pendingForge={white:null,black:null},currentTurn="white",selected=null,gameEnded=false,moves=[],time={white:600,black:600},score={white:0,black:0},moveCount=0,colossusReady={white:false,black:false},colossusSacrificeReady={white:false,black:false},singularities=[];
-let lastStateAt=Date.now(), localTimer=null;
+// 개잼체스 1.0 Alpha - 단일 game.js 버전
 
-function connect(){
-  const protocol=location.protocol==="https:"?"wss:":"ws:";
-  socket=new WebSocket(protocol+"//"+location.host);
-  socket.onopen=()=>{document.getElementById("connectionStatus").textContent="서버 연결 완료"};
-  socket.onmessage=e=>{
-    const m=JSON.parse(e.data);
-    if(m.type==="joined"){
-      myColor=m.color;roomCode=m.room;
-      document.getElementById("lobby").classList.add("hidden");
-      document.getElementById("game").classList.remove("hidden");
-      document.getElementById("roomInfo").textContent=`ROOM: ${roomCode} / YOU: ${myColor.toUpperCase()}`;
-      return;
-    }
-    if(m.type==="roomList"){
-      renderRoomList(m.rooms||[]);
-      return;
-    }
-    if(m.type==="state"){
-      lastStateAt=Date.now();
-      boardState=m.board;control=m.control;seaState=m.sea||{};pendingForge=m.pendingForge||{white:null,black:null};
-      currentTurn=m.currentTurn;moves=m.moves;time=m.time;gameEnded=m.gameEnded;
-      score=m.score;moveCount=m.moveCount;colossusReady=m.colossusReady;
-      colossusSacrificeReady=m.colossusSacrificeReady||{white:false,black:false};
-      singularities=m.singularities||[];
-      if(pendingForge?.[myColor])selected=null;
-      drawBoard();renderMoves();updateUI();updateForgePlacementBanner();
-    }
-    if(m.type==="error"){alert(m.message); selected=null; drawBoard()}
+// ===== 기물/특성/조합 정의 =====
+const TRAIT_LABELS = {
+  fire: "화",
+  cold: "냉",
+  armor: "장갑",
+  heavyArmor: "중장갑",
+  mobility: "기동",
+  stealth: "은신",
+  berserk: "폭주",
+  breakthrough: "돌파",
+  piercing: "관통",
+  blessing: "가호",
+  detection: "탐지",
+  confusion: "혼란",
+  hypnosis: "최면",
+  overwhelm: "압도",
+  barrage: "포격",
+  glass: "유리",
+  freedom: "자유",
+  command: "지휘",
+};
+
+const LOADOUTS = [
+  ["cavalry","기마병"],
+  ["infantry","보병"],
+  ["kamikaze","자살특공대"],
+  ["viking","바이킹"],
+  ["tank_tree","전차류"],
+  ["fleet_tree","함대류"],
+  ["necromancer","네크로맨서"],
+  ["rocket","로켓"],
+  ["commander","지휘관"],
+  ["pope","교황"],
+  ["radar","레이더"],
+  ["ninja","닌자"],
+  ["hypnotist","최면술사"],
+];
+
+const basic = {
+  pawn:   {name:"폰", symbol:"P", move:{kind:"king"}, attack:{kind:"king"}, traits:[], synthetic:false},
+  rook:   {name:"룩", symbol:"R", move:{kind:"rook"}, attack:{kind:"rook"}, traits:[], synthetic:false},
+  knight: {name:"나이트", symbol:"N", move:{kind:"knight"}, attack:{kind:"knight"}, traits:[], synthetic:false},
+  bishop: {name:"비숍", symbol:"B", move:{kind:"bishop"}, attack:{kind:"bishop"}, traits:[], synthetic:false},
+  queen:  {name:"퀸", symbol:"Q", move:{kind:"queen"}, attack:{kind:"queen"}, traits:[], synthetic:false},
+  king:   {name:"킹", symbol:"K", move:{kind:"king"}, attack:{kind:"king"}, traits:[], synthetic:false},
+};
+
+const special = {
+  cavalry: {
+    name:"기마병", symbol:"기",
+    move:{kind:"rook"}, attack:{kind:"square", radius:1, moving:true},
+    traits:["mobility"], synthetic:true
+  },
+  tank: {
+    name:"전차", symbol:"전",
+    move:{kind:"square", radius:2},
+    attack:{
+      kind:"multi",
+      modes:[
+        {kind:"square", radius:1, moving:true},
+        {kind:"squareRing", radius:2, inner:1, stationary:true}
+      ]
+    },
+    traits:["mobility","armor"], synthetic:true
+  },
+  heavyTank: {
+    name:"중전차", symbol:"중",
+    move:{kind:"square", radius:2},
+    attack:{
+      kind:"multi",
+      modes:[
+        {kind:"square", radius:1, moving:true},
+        {kind:"diamondRing", radius:3, inner:2, stationary:true}
+      ]
+    },
+    traits:["mobility","armor","barrage"], synthetic:true
+  },
+  superHeavyTank: {
+    name:"초중전차", symbol:"초",
+    move:{kind:"diamond", radius:2},
+    attack:{kind:"diamond", radius:2, stationary:true},
+    traits:["piercing","breakthrough","heavyArmor","barrage"], synthetic:true
+  },
+  rocket: {
+    name:"로켓", symbol:"로",
+    move:{kind:"none"},
+    attack:{kind:"diamondRing", radius:3, inner:2, stationary:true},
+    traits:["berserk","barrage"], synthetic:true
+  },
+  commander: {
+    name:"지휘관", symbol:"지",
+    move:{kind:"king"}, attack:{kind:"none"},
+    traits:["command"], synthetic:true
+  },
+  infantry: {
+    name:"보병", symbol:"보",
+    move:{kind:"square", radius:1},
+    attack:{kind:"diamond", radius:2, moving:true},
+    traits:[], synthetic:true
+  },
+  kamikaze: {
+    name:"자살특공대", symbol:"자",
+    move:{kind:"diamond", radius:2},
+    attack:{kind:"square", radius:1, moving:true},
+    traits:["barrage","glass","stealth"], synthetic:true
+  },
+  viking: {
+    name:"바이킹", symbol:"바",
+    move:{kind:"square", radius:1},
+    attack:{kind:"square", radius:1, moving:true},
+    traits:["freedom","berserk"], synthetic:true
+  },
+  pope: {
+    name:"교황", symbol:"교",
+    move:{kind:"none"}, attack:{kind:"none"},
+    traits:["blessing"], synthetic:true
+  },
+  ninja: {
+    name:"닌자", symbol:"닌",
+    move:{kind:"square", radius:2},
+    attack:{kind:"square", radius:1, moving:true},
+    traits:["mobility","stealth"], synthetic:true
+  },
+  radar: {
+    name:"레이더", symbol:"레",
+    move:{kind:"none"}, attack:{kind:"none"},
+    traits:["detection","armor"], detectionRadius:3, synthetic:true
+  },
+  hypnotist: {
+    name:"최면술사", symbol:"최",
+    move:{kind:"king"}, attack:{kind:"none"},
+    traits:["hypnosis"], synthetic:true
+  },
+  hero: {
+    name:"영웅", symbol:"영",
+    move:{kind:"diamond", radius:2},
+    attack:{kind:"diamond", radius:2, moving:true},
+    traits:["overwhelm"], overwhelmRadius:2, synthetic:true
+  },
+  necromancer: {
+    name:"네크로맨서", symbol:"네",
+    move:{kind:"none"}, attack:{kind:"none"},
+    traits:[], synthetic:true, placeholder:true
+  },
+
+  fleetFrame: {
+    name:"함대 틀", symbol:"틀",
+    move:{kind:"none"}, attack:{kind:"none"},
+    traits:[], synthetic:true, naval:true
+  },
+  submarine: {
+    name:"잠수함", symbol:"잠",
+    move:{kind:"diamond", radius:2},
+    attack:{kind:"square", radius:1, stationary:true, seaOnlyTarget:true},
+    traits:["armor","stealth"], synthetic:true, naval:true
+  },
+  battleship: {
+    name:"전함", symbol:"함",
+    move:{kind:"diamond", radius:3},
+    attack:{kind:"square", radius:2, stationary:true, canLandAttack:true},
+    traits:["armor","detection"], detectionRadius:1,
+    barrageOnLand:true, synthetic:true, naval:true
+  },
+  superBattleship: {
+    name:"초중전함", symbol:"대",
+    move:{kind:"diamond", radius:3},
+    attack:{kind:"square", radius:2, stationary:true, canLandAttack:true},
+    traits:["heavyArmor","piercing","barrage","detection"], detectionRadius:2,
+    synthetic:true, naval:true
+  },
+  carrier: {
+    name:"항공모함", symbol:"항",
+    move:{kind:"diamond", radius:2},
+    attack:{kind:"diamond", radius:4, stationary:true, canLandAttack:true},
+    traits:["heavyArmor","berserk"], synthetic:true, naval:true,
+    baseAttack:0.5, inflictsConfusion:true
+  }
+};
+
+const PIECES = {...basic, ...special};
+
+const RECIPES = [
+  {result:"cavalry", requires:["knight","pawn"], loadout:"cavalry"},
+  {result:"tank", requires:["rook","rook"], loadout:"tank_tree"},
+  {result:"heavyTank", requires:["tank","knight"], loadout:"tank_tree"},
+  {result:"superHeavyTank", requires:["tank","tank"], loadout:"tank_tree"},
+  {result:"rocket", requires:["rook","pawn","pawn","pawn"], loadout:"rocket"},
+  {result:"commander", requires:["queen","knight"], loadout:"commander"},
+  {result:"infantry", requires:["pawn","pawn"], loadout:"infantry"},
+  {result:"kamikaze", requires:["infantry"], loadout:"kamikaze"},
+  {result:"infantry", requires:["kamikaze"], loadout:"infantry"},
+  {result:"viking", requires:["knight","pawn","pawn"], loadout:"viking"},
+  {result:"pope", requires:["bishop","bishop"], loadout:"pope"},
+  {result:"ninja", requires:["infantry","pawn"], loadout:"ninja"},
+  {result:"radar", requires:["rook","pawn","pawn"], loadout:"radar"},
+  {result:"hypnotist", requires:["bishop","bishop","bishop"], loadout:"hypnotist"},
+
+  {result:"fleetFrame", requires:["pawn","pawn","pawn"], loadout:"fleet_tree"},
+  {result:"submarine", requires:["fleetFrame","pawn"], loadout:"fleet_tree"},
+  {result:"battleship", requires:["fleetFrame","rook"], loadout:"fleet_tree"},
+  {result:"superBattleship", requires:["battleship","battleship"], loadout:"fleet_tree"},
+  {result:"carrier", requires:["fleetFrame","bishop"], loadout:"fleet_tree"},
+];
+
+function recipeFor(types, loadout) {
+  const sorted = [...types].sort().join("|");
+  return RECIPES.find(r =>
+    r.requires.slice().sort().join("|") === sorted &&
+    loadout.includes(r.loadout)
+  ) || null;
+}
+
+function traitNames(traits=[]) {
+  return traits.map(t => TRAIT_LABELS[t] || t);
+}
+
+// ===== 게임 엔진 =====
+const SIZE = 14;
+const LAND_MIN = 2;
+const LAND_MAX = 11;
+
+function id() {
+  return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4);
+}
+function other(color) { return color === "white" ? "black" : "white"; }
+function inBounds(r,c) { return r>=0 && c>=0 && r<SIZE && c<SIZE; }
+function isLand(r,c) { return r>=LAND_MIN && r<=LAND_MAX && c>=LAND_MIN && c<=LAND_MAX; }
+function isSea(r,c) { return inBounds(r,c) && !isLand(r,c); }
+function key(r,c){ return `${r},${c}`; }
+function at(state,r,c){ return state.pieces.find(p=>p.r===r && p.c===c) || null; }
+function harborAt(state,r,c){ return state.harbors.find(h=>h.r===r && h.c===c) || null; }
+
+function initialTerritory(r,c) {
+  if (r <= 4) return "black";
+  if (r >= 9) return "white";
+  return "neutral";
+}
+
+function makePiece(type,color,r,c) {
+  const d = PIECES[type];
+  const p = {
+    id:id(), type, color, controller:color, r,c,
+    hp:1, origin:{r,c}, synthetic:!!d.synthetic,
+    prince:false, cooldownUntilOwnTurn:0,
+    hypnosisUntilPly:null, tempCommands:[],
   };
-  socket.onclose=()=>document.getElementById("connectionStatus").textContent="서버 연결 끊김";
+  p.hp = maxHp(p, null);
+  return p;
 }
 
-function sendRaw(obj){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(obj))}
+function createInitialState(loadouts={white:[],black:[]}) {
+  const territory = {};
+  for (let r=0;r<SIZE;r++) for (let c=0;c<SIZE;c++) territory[key(r,c)] = initialTerritory(r,c);
 
-/*
- * 로비 화면 전환: 메뉴(진입) / 방 만들기 / 방 목록
- */
-const lobbyMenu=document.getElementById("lobbyMenu");
-const lobbyCreate=document.getElementById("lobbyCreate");
-const lobbyList=document.getElementById("lobbyList");
-
-function showLobbyView(view){
-  lobbyMenu.classList.toggle("hidden",view!=="menu");
-  lobbyCreate.classList.toggle("hidden",view!=="create");
-  lobbyList.classList.toggle("hidden",view!=="list");
-}
-
-document.getElementById("menuCreateButton").addEventListener("click",()=>{
-  showLobbyView("create");
-});
-
-document.getElementById("menuListButton").addEventListener("click",()=>{
-  showLobbyView("list");
-  sendRaw({type:"listRooms"});
-});
-
-document.getElementById("createBackButton").addEventListener("click",()=>{
-  showLobbyView("menu");
-});
-
-document.getElementById("listBackButton").addEventListener("click",()=>{
-  showLobbyView("menu");
-});
-
-document.getElementById("createRoomButton").addEventListener("click",()=>{
-  if(!socket||socket.readyState!==WebSocket.OPEN)return alert("서버에 연결되지 않았다.");
-  const name=document.getElementById("createNameInput").value.trim();
-  const password=document.getElementById("createPasswordInput").value;
-  sendRaw({type:"createRoom",name,password});
-});
-
-document.getElementById("refreshRoomsButton").addEventListener("click",()=>{
-  sendRaw({type:"listRooms"});
-});
-
-/*
- * 방 목록 렌더링. 방 이름을 주로 보여주고 코드는 작게 함께 표시한다.
- * 비밀번호가 걸린 방은 자물쇠 표시를 하고, 참가 버튼을 누르면 비밀번호를 물어본다.
- */
-function renderRoomList(rooms){
-  const box=document.getElementById("roomList");
-  box.innerHTML="";
-
-  if(rooms.length===0){
-    const empty=document.createElement("div");
-    empty.className="room-list-empty";
-    empty.textContent="방이 없습니다.";
-    box.appendChild(empty);
-    return;
+  const order = ["rook","bishop","knight","bishop","queen","king","knight","bishop","knight","rook"];
+  const pieces = [];
+  for (let i=0;i<10;i++) {
+    pieces.push(makePiece(order[i],"black",2,2+i));
+    pieces.push(makePiece("pawn","black",3,2+i));
+    pieces.push(makePiece("pawn","white",10,2+i));
+    pieces.push(makePiece(order[i],"white",11,2+i));
   }
 
-  for(const room of rooms){
-    const row=document.createElement("div");
-    row.className="room-row";
-
-    const name=document.createElement("span");
-    name.className="room-name";
-    name.textContent=room.name||room.code;
-    row.appendChild(name);
-
-    const code=document.createElement("span");
-    code.className="room-code";
-    code.textContent=room.code;
-    row.appendChild(code);
-
-    if(room.hasPassword){
-      const lock=document.createElement("span");
-      lock.className="room-lock";
-      lock.textContent="🔒";
-      row.appendChild(lock);
-    }
-
-    const players=document.createElement("span");
-    players.className="room-players";
-    players.textContent=room.full?"가득참":`${room.playerCount}/2`;
-    row.appendChild(players);
-
-    const btn=document.createElement("button");
-    btn.textContent="참가";
-    btn.disabled=room.full;
-    btn.onclick=()=>{
-      let password="";
-      if(room.hasPassword){
-        password=prompt("비밀번호를 입력하세요:")||"";
-      }
-      sendRaw({type:"join",room:room.code,password});
-    };
-    row.appendChild(btn);
-
-    box.appendChild(row);
-  }
+  return {
+    version:1,
+    turn:"white",
+    ply:0,
+    ownTurns:{white:0,black:0},
+    territory,
+    pieces,
+    harbors:[],
+    portsPlaced:{white:0,black:0},
+    loadouts,
+    kingDead:{white:false,black:false},
+    kingDeathOwnTurn:{white:null,black:null},
+    princeCoronationOwnTurn:{white:null,black:null},
+    revivals:[],
+    winner:null,
+    log:["게임 시작. 백의 차례."],
+  };
 }
 
-function sendAction(action){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:"action",action}))}
+function pieceDef(p){ return PIECES[p.type]; }
 
-function inside(r,c){return r>=0&&r<8&&c>=0&&c<8}
-function squareName(r,c){return "abcdefgh"[c]+(8-r)}
-function squareLabel(r,c){return isSeaSquare(r,c)?`바다(${r},${c})`:squareName(r,c)}
-function chebyshev(r1,c1,r2,c2){return Math.max(Math.abs(r1-r2),Math.abs(c1-c2))}
-function clearPath(fr,fc,tr,tc){
-  const dr=Math.sign(tr-fr),dc=Math.sign(tc-fc);
+function isConfused(state,p) {
+  if (state.kingDead[p.color]) return true;
+  return p.confusionUntilPly != null && state.ply < p.confusionUntilPly;
+}
+
+function effectiveTraits(state,p) {
+  if (isConfused(state,p)) return [];
+  return [...(pieceDef(p).traits || [])];
+}
+
+function hasTrait(state,p,t) {
+  return effectiveTraits(state,p).includes(t);
+}
+
+function maxHp(p,state) {
+  if (state && isConfused(state,p)) return 0.5;
+  const traits = pieceDef(p).traits || [];
+  let hp = 1;
+  if (traits.includes("cold")) hp += 2;
+  if (traits.includes("armor")) hp += 1;
+  if (traits.includes("heavyArmor")) hp += 3;
+  if (state && (p.tempCommands||[]).some(x => x.kind==="lastStand" && state.ply < x.untilPly)) hp += 1;
+  return hp;
+}
+
+function attackPower(state,p) {
+  if (isConfused(state,p)) return 0.5;
+  const d = pieceDef(p);
+  let atk = d.baseAttack ?? 1;
+  const tr = effectiveTraits(state,p);
+  if (tr.includes("fire")) atk += 1;
+  if (tr.includes("piercing")) atk += 3;
+  return atk;
+}
+
+function effectiveMove(state,p) {
+  if (isConfused(state,p)) return {kind:"king"};
+  return pieceDef(p).move;
+}
+
+function pathClear(state,fr,fc,tr,tc) {
+  const dr = Math.sign(tr-fr), dc = Math.sign(tc-fc);
   let r=fr+dr,c=fc+dc;
-  while(r!==tr||c!==tc){if(boardState[r][c])return false;r+=dr;c+=dc}
+  while(r!==tr || c!==tc) {
+    if (at(state,r,c)) return false;
+    r+=dr;c+=dc;
+  }
   return true;
 }
 
-/*
- * 이동 가능 여부 (클라이언트 미리보기용).
- * 서버가 최종 판정을 내리므로, 여기서는 색 검사를 하지 않는다
- * (자신의 기물도 좌클릭으로 죽일 수 있어야 하므로).
- */
-function canMove(fr,fc,tr,tc){
-  const p=boardState[fr]?.[fc];
-  if(!p)return false;
-  if(p.type==="turret"||p.type==="pawn"&&p.gun)return false;
-  const dr=Math.abs(tr-fr),dc=Math.abs(tc-fc);
-  if(p.type==="pawn"||p.type==="king"||p.type==="colossus")return dr<=1&&dc<=1&&(dr||dc);
-  if(p.type==="knight")return(dr===2&&dc===1)||(dr===1&&dc===2);
-  if(p.type==="rook")return(fr===tr||fc===tc)&&clearPath(fr,fc,tr,tc);
-  if(p.type==="bishop")return dr===dc&&dr!==0&&clearPath(fr,fc,tr,tc);
-  if(p.type==="queen")return((fr===tr||fc===tc)||dr===dc)&&clearPath(fr,fc,tr,tc);
-  if(p.type==="wildHorse")return dr<=2&&dc<=2&&(dr||dc);
-  if(p.type==="cavalry")return(fr===tr||fc===tc)&&(dr||dc);
-  if(p.type==="necromancer")return(dr===dc&&dr!==0&&clearPath(fr,fc,tr,tc))||(dr<=1&&dc<=1&&(dr||dc));
-  if(p.type==="tank")return(fr===tr||fc===tc)&&(dr||dc);
-  return false;
-}
-function getCastlingMoves(r,c){
-  const p=boardState[r]?.[c];
-  if(!p||p.type!=="king"||p.hasMoved)return[];
-  const out=[];
-  const rk=boardState[r][7];
-  if(rk&&rk.type==="rook"&&rk.color===p.color&&!rk.hasMoved&&!boardState[r][5]&&!boardState[r][6])out.push({r,c:c+2});
-  const rq=boardState[r][0];
-  if(rq&&rq.type==="rook"&&rq.color===p.color&&!rq.hasMoved&&!boardState[r][1]&&!boardState[r][2]&&!boardState[r][3])out.push({r,c:c-2});
-  return out;
-}
-function getMoves(r,c){
-  const out=[];
-  for(let tr=0;tr<8;tr++)for(let tc=0;tc<8;tc++)if(canMove(r,c,tr,tc))out.push({r:tr,c:tc});
-  const p=boardState[r]?.[c];
-  if(p?.type==="king")out.push(...getCastlingMoves(r,c));
-  return out;
-}
-function getGunTargets(r,c){
-  const p=boardState[r]?.[c];
-  if(!p?.gun)return[];
-  const out=[];
-  for(let tr=r-2;tr<=r+2;tr++)for(let tc=c-2;tc<=c+2;tc++)if(inside(tr,tc)&&!(tr===r&&tc===c)&&boardState[tr][tc])out.push({r:tr,c:tc});
-  return out;
-}
-function getTurretTargets(r,c){
-  const p=boardState[r]?.[c];
-  if(!p||p.type!=="turret"||p.turretDisabled||p.ammo<=0)return[];
-  const out=[];
-  for(let tr=0;tr<8;tr++)for(let tc=0;tc<8;tc++){
-    const dist=Math.max(Math.abs(tr-r),Math.abs(tc-c));
-    if(dist<2||dist>3)continue;
-    const q=boardState[tr][tc];
-    if(q)out.push({r:tr,c:tc});
-  }
-  return out;
-}
+function shapeAllows(state,p,shape,tr,tc) {
+  if (!shape || shape.kind==="none") return false;
+  const dr = tr-p.r, dc = tc-p.c;
+  const ar = Math.abs(dr), ac = Math.abs(dc);
+  if (ar===0 && ac===0) return false;
 
-/*
- * 잠수함: 인접한(체비셰프 거리 1) 바다 칸의 함선만 공격 가능 (해전 전용).
- */
-function getSubmarineTargets(r,c){
-  const p=pieceAt(r,c);
-  if(!p||p.type!=="submarine")return[];
-  const out=[];
-  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
-    if(dr===0&&dc===0)continue;
-    const tr=r+dr,tc=c+dc;
-    if(isSeaSquare(tr,tc)&&seaPieceAt(tr,tc))out.push({r:tr,c:tc});
-  }
-  return out;
-}
-
-/*
- * 전함: 자신 위치 기준 3*3(체비셰프 거리 <=1) 범위를 한꺼번에 포격한다.
- * 대상을 따로 고르지 않으므로, 자기 자신을 다시 클릭하면 발동한다.
- */
-function getBattleshipBlast(r,c){
-  const out=[];
-  for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
-    if(dr===0&&dc===0)continue;
-    const tr=r+dr,tc=c+dc;
-    if(pieceAt(tr,tc))out.push({r:tr,c:tc});
-  }
-  return out;
-}
-
-/*
- * 항공모함: 자신 기준 7*7(체비셰프 거리 <=3) 범위의 빈 칸으로 이동 가능.
- */
-function getCarrierMoves(r,c){
-  const p=pieceAt(r,c);
-  if(!p||p.type!=="carrier")return[];
-  const out=[];
-  for(let tr=r-3;tr<=r+3;tr++)for(let tc=c-3;tc<=c+3;tc++){
-    if(tr===r&&tc===c)continue;
-    if(tr<-1||tr>8||tc<-1||tc>8)continue;
-    if(!inside(tr,tc)&&!isSeaSquare(tr,tc))continue;
-    if(!pieceAt(tr,tc))out.push({r:tr,c:tc});
-  }
-  return out;
-}
-function countOwn(type){
-  let n=0;
-  for(const row of boardState||[])for(const p of row)if(p&&p.color===myColor&&p.type===type)n++;
-  return n;
-}
-
-/*
- * 연성(합성) 가능 여부 - 서버 판정 규칙과 동일하게 유지해야 한다.
- * 포탑 + 폰은 새 기물이 아니라 "포탑 재장전"(탄약 +1)이다.
- */
-function combinable(a,b){
-  if(!a||!b||a.color!==b.color||a.gun||b.gun)return false;
-  if((a.type==="fleet")||(b.type==="fleet")){
-    const other=a.type==="fleet"?b:a;
-    return other.type!=="fleet"&&["pawn","rook","bishop"].includes(other.type);
-  }
-  return(a.type==="knight"&&b.type==="knight")||(a.type==="bishop"&&b.type==="bishop")||(a.type==="rook"&&b.type==="rook")||((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))||((a.type==="pawn"&&b.type==="turret")||(a.type==="turret"&&b.type==="pawn"));
-}
-const PIECE_LABEL={pawn:"폰",knight:"나이트",bishop:"비숍",rook:"룩",queen:"퀸",king:"킹",fleet:"함대 편제"};
-
-/*
- * 연성 결과 판정. server.js의 forge 액션 판정 로직과 반드시 동일하게 유지한다.
- */
-const RESULT_LABEL={wildHorse:"야생마",necromancer:"네크로맨서",tank:"전차",turret:"포탑",cavalry:"기마병",reload:"포탑 탄약 +1",fleet:"함대 편제",submarine:"잠수함",battleship:"전함",carrier:"항공모함"};
-function combineResultInfo(a,b){
-  let result=null;
-  if(a.type==="fleet"||b.type==="fleet"){
-    const other=a.type==="fleet"?b:a;
-    const fusions={pawn:"submarine",rook:"battleship",bishop:"carrier"};
-    result=fusions[other.type]||null;
-  }
-  else if(a.type==="knight"&&b.type==="knight")result="wildHorse";
-  else if(a.type==="bishop"&&b.type==="bishop")result="necromancer";
-  else if(a.type==="rook"&&b.type==="rook")result="tank";
-  else if((a.type==="pawn"&&b.type==="rook")||(a.type==="rook"&&b.type==="pawn"))result="turret";
-  else if((a.type==="pawn"&&b.type==="knight")||(a.type==="knight"&&b.type==="pawn"))result="cavalry";
-  else if((a.type==="pawn"&&b.type==="turret")||(a.type==="turret"&&b.type==="pawn"))result="reload";
-  if(!result)return null;
-  return {result,label:RESULT_LABEL[result]};
-}
-function combinable3(a,b,c){
-  if(!a||!b||!c)return false;
-  if(a.color!==b.color||b.color!==c.color)return false;
-  if(a.gun||b.gun||c.gun)return false;
-  return a.type==="pawn"&&b.type==="pawn"&&c.type==="pawn";
-}
-
-/*
- * 기물 표시 글자(유니코드). 실제 보드 기물(symbol 보유)과
- * 연성대 미리보기용 가상 기물(symbol 없음) 모두에 사용한다.
- */
-function pieceGlyph(p){
-  if(!p)return "";
-  if(p.type==="pawn"&&p.gun)return p.color==="white"?"♙":"♟";
-  if(p.type==="wildHorse")return p.color==="white"?"♘":"♞";
-  if(p.type==="necromancer")return p.color==="white"?"♗":"♝";
-  if(p.type==="cavalry")return p.color==="white"?"♘":"♞";
-  if(p.type==="tank")return "▣";
-  if(p.type==="fleet")return "⚓";
-  if(p.type==="colossus")return p.color==="white"?"♔":"♚";
-  if(p.type==="turret")return p.color==="white"?"♖":"♜";
-  if(p.symbol)return p.symbol;
-  const std={pawn:{white:"♙",black:"♟"},knight:{white:"♘",black:"♞"},bishop:{white:"♗",black:"♝"},rook:{white:"♖",black:"♜"},queen:{white:"♕",black:"♛"},king:{white:"♔",black:"♚"}};
-  return std[p.type]?.[p.color]||"?";
-}
-
-/*
- * 연성대: 이제 거리 제한이 없다. 아군 기물이면 보드 어디에 있든
- * 드래그(또는 클릭)해서 3*3 그리드 칸에 올리면 연성할 수 있다.
- * 제작 자체는 턴을 쓰지 않는다 - 완성된 기물을 보드에 배치할 때만 턴을 쓴다.
- */
-function hasAnyCombinablePair(){
-  const pieces=[];
-  for(let r=0;r<8;r++)for(let c=0;c<8;c++){const p=boardState[r]?.[c];if(p&&p.color===myColor)pieces.push(p)}
-  for(let i=0;i<pieces.length;i++){
-    for(let j=i+1;j<pieces.length;j++){
-      if(combinable(pieces[i],pieces[j]))return true;
-    }
+  switch(shape.kind) {
+    case "king": return ar<=1 && ac<=1;
+    case "square": return Math.max(ar,ac)<=shape.radius;
+    case "diamond": return ar+ac<=shape.radius;
+    case "squareRing": return Math.max(ar,ac)<=shape.radius && Math.max(ar,ac)>shape.inner;
+    case "diamondRing": return ar+ac<=shape.radius && ar+ac>shape.inner;
+    case "knight": return (ar===2&&ac===1)||(ar===1&&ac===2);
+    case "rook":
+      return (dr===0 || dc===0) && pathClear(state,p.r,p.c,tr,tc);
+    case "bishop":
+      return ar===ac && pathClear(state,p.r,p.c,tr,tc);
+    case "queen":
+      return ((dr===0||dc===0)||ar===ac) && pathClear(state,p.r,p.c,tr,tc);
   }
   return false;
 }
 
-let forgeCells=new Array(9).fill(null); // 각각 null 또는 {r,c}
-let draggedFrom=null; // 드래그 중인 기물의 {r,c}
-
-function forgeFilledCells(){
-  return forgeCells
-    .map((pos,i)=>pos?{i,r:pos.r,c:pos.c,p:pieceAt(pos.r,pos.c)}:null)
-    .filter(x=>x&&x.p);
+function attackModeFor(state,p,tr,tc) {
+  if (isConfused(state,p)) {
+    return shapeAllows(state,p,{kind:"king"},tr,tc) ? {kind:"king",moving:true} : null;
+  }
+  const a = pieceDef(p).attack;
+  if (!a || a.kind==="none") return null;
+  if (a.kind==="multi") {
+    for (const mode of a.modes) if (shapeAllows(state,p,mode,tr,tc)) return mode;
+    return null;
+  }
+  return shapeAllows(state,p,a,tr,tc) ? a : null;
 }
 
-function renderForgeGrid(){
-  const grid=document.getElementById("forgeGrid");
-  grid.innerHTML="";
-  for(let i=0;i<9;i++){
-    const cellEl=document.createElement("div");
-    cellEl.className="forge-cell";
-    cellEl.dataset.index=i;
-
-    const pos=forgeCells[i];
-    const p=pos?pieceAt(pos.r,pos.c):null;
-
-    /*
-     * 참조하던 기물이 다른 액션(상대의 수, 자신의 이동 등)으로
-     * 사라졌거나 더 이상 내 기물이 아니게 됐다면 자동으로 비운다.
-     */
-    if(pos&&(!p||p.color!==myColor)){
-      forgeCells[i]=null;
-    } else if(p){
-      cellEl.classList.add("filled");
-      const glyph=document.createElement("span");
-      glyph.className=p.color==="white"?"white-piece":"black-piece";
-      glyph.textContent=pieceGlyph(p);
-      cellEl.appendChild(glyph);
-    }
-
-    cellEl.addEventListener("click",()=>{
-      if(forgeCells[i]){forgeCells[i]=null;renderForge()}
-    });
-
-    cellEl.addEventListener("dragover",e=>{e.preventDefault();cellEl.classList.add("drag-over")});
-    cellEl.addEventListener("dragleave",()=>cellEl.classList.remove("drag-over"));
-    cellEl.addEventListener("drop",e=>{
-      e.preventDefault();
-      cellEl.classList.remove("drag-over");
-      if(!draggedFrom)return;
-      /* 같은 기물을 두 칸에 중복으로 놓지 못하게 함 */
-      const dup=forgeCells.findIndex(pos=>pos&&pos.r===draggedFrom.r&&pos.c===draggedFrom.c);
-      if(dup!==-1)forgeCells[dup]=null;
-      forgeCells[i]=draggedFrom;
-      draggedFrom=null;
-      renderForge();
-    });
-
-    grid.appendChild(cellEl);
-  }
+function domainAllowsMove(state,p,r,c) {
+  const d = pieceDef(p);
+  if (hasTrait(state,p,"freedom")) return true;
+  if (d.naval) return isSea(r,c);
+  return isLand(r,c);
 }
 
-function renderForgeOutput(){
-  const outEl=document.getElementById("forgeOutputSlot");
-  const infoEl=document.getElementById("forgeResultInfo");
-  const confirmBtn=document.getElementById("forgeConfirm");
+function canMove(state,p,tr,tc,viewer=null) {
+  if (!inBounds(tr,tc)) return false;
+  if (!domainAllowsMove(state,p,tr,tc)) return false;
+  if (!shapeAllows(state,p,effectiveMove(state,p),tr,tc)) return false;
 
-  outEl.innerHTML="";
-  outEl.classList.remove("ready","invalid");
+  const target = at(state,tr,tc);
+  if (!target) return true;
 
-  const filled=forgeFilledCells();
-
-  if(filled.length===0){
-    const label=document.createElement("span");
-    label.className="forge-slot-label";
-    label.textContent="결과";
-    outEl.appendChild(label);
-    infoEl.textContent="";
-    confirmBtn.classList.add("hidden");
-    return;
-  }
-
-  if(filled.length!==2&&filled.length!==3){
-    outEl.classList.add("invalid");
-    infoEl.textContent="재료는 2개(일반 연성) 또는 폰 3개(함대 편제)를 놓아야 합니다.";
-    confirmBtn.classList.add("hidden");
-    return;
-  }
-
-  if(filled.length===3){
-    const [A,B,C]=filled;
-    const ok=combinable3(A.p,B.p,C.p);
-
-    if(!ok){
-      outEl.classList.add("invalid");
-      infoEl.textContent="폰 3개만 함대 편제로 연성할 수 있습니다.";
-      confirmBtn.classList.add("hidden");
-      return;
-    }
-
-    const cannotForgeNow3=currentTurn!==myColor||gameEnded||!!pendingForge?.[myColor];
-
-    outEl.classList.add("ready");
-    const glyph3=document.createElement("span");
-    glyph3.className=myColor==="white"?"white-piece":"black-piece";
-    glyph3.textContent=pieceGlyph({type:"fleet",color:myColor});
-    outEl.appendChild(glyph3);
-
-    infoEl.textContent=`${PIECE_LABEL.pawn}(${squareLabel(A.r,A.c)}) + ${PIECE_LABEL.pawn}(${squareLabel(B.r,B.c)}) + ${PIECE_LABEL.pawn}(${squareLabel(C.r,C.c)}) → ${RESULT_LABEL.fleet} (만든 뒤 바다 칸에 배치, 배치 시 턴 소모)`;
-    confirmBtn.classList.toggle("hidden",cannotForgeNow3);
-    return;
-  }
-
-  const [A,B]=filled;
-  const info=combinable(A.p,B.p)?combineResultInfo(A.p,B.p):null;
-
-  if(!info){
-    outEl.classList.add("invalid");
-    infoEl.textContent="이 두 기물은 연성할 수 없습니다.";
-    confirmBtn.classList.add("hidden");
-    return;
-  }
-
-  const cannotForgeNow=currentTurn!==myColor||gameEnded||!!pendingForge?.[myColor];
-
-  outEl.classList.add("ready");
-  const glyph=document.createElement("span");
-  glyph.className=myColor==="white"?"white-piece":"black-piece";
-  glyph.textContent=info.result==="reload"?pieceGlyph({type:"turret",color:myColor}):pieceGlyph({type:info.result,color:myColor});
-  outEl.appendChild(glyph);
-
-  const isFleetFusion=["submarine","battleship","carrier"].includes(info.result);
-  const tail=info.result==="reload"?"(제자리에서 즉시 적용, 턴 소모)":isFleetFusion?"(만든 뒤 바다 칸에 배치, 배치 시 턴 소모)":"(만든 뒤 지배하는 빈 칸에 배치, 배치 시 턴 소모)";
-  infoEl.textContent=`${PIECE_LABEL[A.p.type]||A.p.type}(${squareLabel(A.r,A.c)}) + ${PIECE_LABEL[B.p.type]||B.p.type}(${squareLabel(B.r,B.c)}) → ${info.label} ${tail}`;
-  confirmBtn.classList.toggle("hidden",cannotForgeNow);
+  // 안 보이는 은신 기물은 빈 칸처럼 취급 -> 실제 이동 시 충돌사망 판정
+  if (viewer && !isVisibleTo(state,target,viewer)) return true;
+  return false;
 }
 
-function renderForge(){
-  renderForgeGrid();
-  renderForgeOutput();
+function canAttackPoint(state,p,tr,tc,viewer=null) {
+  if (!inBounds(tr,tc)) return false;
+  const mode = attackModeFor(state,p,tr,tc);
+  if (!mode) return false;
+  const d = pieceDef(p);
+  if (mode.seaOnlyTarget && !isSea(tr,tc)) return false;
+
+  const target = at(state,tr,tc);
+  if (mode.stationary) return true; // 좌표 포격 허용
+  if (!target) return false;
+  if (viewer && !isVisibleTo(state,target,viewer)) return false;
+  return true;
 }
 
-function resetForgeCells(){
-  forgeCells=new Array(9).fill(null);
-  renderForge();
-}
-
-document.getElementById("forgeReset").addEventListener("click",resetForgeCells);
-
-document.getElementById("forgeConfirm").addEventListener("click",()=>{
-  const filled=forgeFilledCells();
-  if(filled.length===3){
-    const [A,B,C]=filled;
-    if(!combinable3(A.p,B.p,C.p))return;
-    sendAction({type:"forge",fr:A.r,fc:A.c,tr:B.r,tc:B.c,er:C.r,ec:C.c});
-    resetForgeCells();
-    return;
-  }
-  if(filled.length!==2)return;
-  const [A,B]=filled;
-  sendAction({type:"forge",fr:A.r,fc:A.c,tr:B.r,tc:B.c});
-  resetForgeCells();
-});
-
-/*
- * 연성 기물 배치 모드: 서버가 pendingForge를 보내오면(연성 완료, 배치 대기)
- * 배너를 보여주고, 보드에서 지배하는 빈 칸을 클릭하면 배치(턴 소모)한다.
- */
-function updateForgePlacementBanner(){
-  const banner=document.getElementById("forgePlacementBanner");
-  const pending=pendingForge?.[myColor];
-
-  if(!pending){
-    banner.classList.add("hidden");
-    return;
-  }
-
-  banner.classList.remove("hidden");
-  const glyphEl=document.getElementById("forgePendingGlyph");
-  glyphEl.className=myColor==="white"?"white-piece forge-pending-glyph":"black-piece forge-pending-glyph";
-  glyphEl.textContent=pieceGlyph(pending.piece);
-
-  const hintEl=document.getElementById("forgePlacementHint");
-  const isFleetFamily=["fleet","submarine","battleship","carrier"].includes(pending.piece.type);
-  hintEl.textContent=isFleetFamily
-    ?"보드를 둘러싼 바다 칸(검은 칸)의 빈 칸을 클릭해 배치하세요."
-    :"지배하는 빈 칸을 클릭해 배치하세요.";
-}
-
-document.getElementById("forgePlacementCancel").addEventListener("click",()=>{
-  sendAction({type:"cancelForge"});
-});
-
-
-/*
- * 네크로맨서 특이점 생성 대상: 선택된 네크로맨서 주위 3*3칸의 빈 칸(이미 특이점이 없는 곳).
- */
-function getSingularityTargets(r,c){
-  const p=boardState[r]?.[c];
-  if(!p||p.type!=="necromancer"||p.color!==myColor)return[];
-  const out=[];
-  for(let tr=r-1;tr<=r+1;tr++)for(let tc=c-1;tc<=c+1;tc++){
-    if(tr===r&&tc===c)continue;
-    if(!inside(tr,tc))continue;
-    if(boardState[tr][tc])continue;
-    if(singularities.some(s=>s.r===tr&&s.c===tc))continue;
-    out.push({r:tr,c:tc});
-  }
-  return out;
-}
-
-/*
- * 백프로모션: 폰이 자신의 뒷랭크(백=row7 / 흑=row0)의 빈 칸에 도달했을 때만
- * 클라이언트에서 선택 모달을 띄운다. 자신의 표준 기물을 잡으며 도달한 경우는
- * 서버가 자동으로 강제 변환하므로 모달이 필요 없다.
- */
-function eligibleFreePromotion(fr,fc,tr,tc){
-  const p=boardState[fr]?.[fc],q=boardState[tr]?.[tc];
-  if(p?.type!=="pawn")return false;
-  const backRank=p.color==="white"?7:0;
-  if(tr!==backRank)return false;
-  return !q;
-}
-function showPromotion(){
-  return new Promise(resolve=>{
-    const modal=document.getElementById("promotionModal");
-    modal.classList.remove("hidden");
-    modal.querySelectorAll("button").forEach(b=>b.onclick=()=>{modal.classList.add("hidden");resolve(b.dataset.piece)});
+function detectionCovers(state,viewer,r,c) {
+  return state.pieces.some(p => {
+    if (p.controller !== viewer) return false;
+    if (!hasTrait(state,p,"detection")) return false;
+    const rad = pieceDef(p).detectionRadius ?? 0;
+    return Math.max(Math.abs(p.r-r),Math.abs(p.c-c)) <= rad;
   });
 }
 
-/*
- * 화/냉 속성은 더 이상 문자 아이콘으로 표시하지 않는다.
- * 대신 drawBoard()에서 칸에 attr-fire(붉은 테두리)/attr-cold(푸른 테두리)
- * 클래스를 붙여 겉모습으로 구분한다.
- */
-/*
- * 화/냉 속성은 칸이 아니라 기물 자체의 테두리(outline)로 표시한다
- * (piece-fire / piece-cold, drawBoard()의 el에 부착).
- */
-const ATTR_ICON={armored:"🛡",piercing:"⚔"};
-
-function isEdgeSquare(r,c){
-  return r===0||r===7||c===0||c===7;
+function isVisibleTo(state,p,viewer) {
+  if (p.controller === viewer) return true;
+  if (!hasTrait(state,p,"stealth")) return true;
+  return detectionCovers(state,viewer,p.r,p.c);
 }
 
-/*
- * 바다 칸(36칸) - 보드(0~7,0~7)를 감싸는 테두리 한 칸짜리 링.
- * 좌표는 -1~8 범위를 쓴다. server.js의 isSeaSquare와 동일하게 유지한다.
- */
-function isSeaSquare(r,c){
-  if(r<-1||r>8||c<-1||c>8)return false;
-  return r===-1||r===8||c===-1||c===8;
-}
-function seaKey(r,c){return r+","+c}
-function seaPieceAt(r,c){return seaState?.[seaKey(r,c)]||null}
-function pieceAt(r,c){
-  if(isSeaSquare(r,c))return seaPieceAt(r,c);
-  return boardState?.[r]?.[c]||null;
+function addLog(state,msg) {
+  state.log.push(msg);
+  if (state.log.length>80) state.log.shift();
 }
 
-function isPlaceable(r,c){
-  const pending=pendingForge?.[myColor];
-  if(!pending)return false;
-  const isFleetFamily=["fleet","submarine","battleship","carrier"].includes(pending.piece.type);
-  if(isFleetFamily){
-    return isSeaSquare(r,c)&&!seaPieceAt(r,c);
-  }
-  if(!inside(r,c))return false;
-  if(boardState[r][c])return false;
-  return control?.[r]?.[c]===myColor;
+function captureTerritory(state,p,r,c) {
+  const owner = p.controller;
+  const k = key(r,c);
+  if (state.territory[k] !== owner) state.territory[k] = owner;
 }
 
-function drawBoard(){
-  const board=document.getElementById("board");
-  board.innerHTML="";
-  if(!boardState)return;
-
-  let moves2=selected?getMoves(selected.r,selected.c):[],
-      guns=selected?getGunTargets(selected.r,selected.c):[],
-      turrets=selected?getTurretTargets(selected.r,selected.c):[],
-      subTargets=selected?getSubmarineTargets(selected.r,selected.c):[],
-      carrierMoves=selected?getCarrierMoves(selected.r,selected.c):[],
-      singularityTargets=selected?getSingularityTargets(selected.r,selected.c):[];
-
-  for(let dr=-1;dr<=8;dr++)for(let dc=-1;dc<=8;dc++){
-    const r=myColor==="black"?7-dr:dr, c=myColor==="black"?7-dc:dc;
-    const isSea=isSeaSquare(r,c);
-    const s=document.createElement("div");
-    s.className="square "+(isSea?"sea-square":((r+c)%2===0?"light":"dark"));
-    const p=pieceAt(r,c);
-
-    const ctrl=control?.[r]?.[c];
-    if(ctrl==="white")s.classList.add("control-white");
-    if(ctrl==="black")s.classList.add("control-black");
-
-    if(isPlaceable(r,c)){
-      s.classList.add("placeable");
-    }
-
-    if(p){
-      const el=document.createElement("span");
-      el.className=p.color==="white"?"white-piece":"black-piece";
-      if(p.type==="pawn"&&p.gun)el.className+=" gun-pawn";
-      /*
-       * 야생마/기마병/네크로맨서는 심볼이 나이트·비숍과 겹치므로
-       * 색깔 글로우 + 배지 글자로 구별한다.
-       */
-      if(p.type==="wildHorse")el.classList.add("wildhorse");
-      if(p.type==="necromancer")el.classList.add("necromancer");
-      if(p.type==="cavalry")el.classList.add("cavalry");
-      if(p.type==="fleet")el.classList.add("fleet");
-      if(p.type==="submarine")el.classList.add("submarine");
-      if(p.type==="battleship")el.classList.add("battleship");
-      if(p.type==="carrier")el.classList.add("carrier");
-      if(p.attributes?.fire)el.classList.add("piece-fire");
-      if(p.attributes?.cold)el.classList.add("piece-cold");
-      el.textContent=pieceGlyph(p);
-
-      /*
-       * 아군 기물은 연성대 슬롯으로 드래그해서 놓을 수 있다.
-       */
-      if(p.color===myColor){
-        el.draggable=true;
-        el.classList.add("piece-draggable");
-        el.addEventListener("dragstart",e=>{
-          draggedFrom={r,c};
-          e.dataTransfer.setData("text/plain",`${r},${c}`);
-        });
+function checkVictory(state) {
+  for (const color of ["white","black"]) {
+    let all = true;
+    for (let r=LAND_MIN;r<=LAND_MAX;r++) {
+      for (let c=LAND_MIN;c<=LAND_MAX;c++) {
+        if (state.territory[key(r,c)] !== color) { all=false; break; }
       }
+      if (!all) break;
+    }
+    if (all) state.winner = color;
+  }
+}
 
-      if(p.type==="turret"){
-        if(p.turretDisabled)el.classList.add("turret-disabled");
-        const ammoTag=document.createElement("div");
-        ammoTag.className="ammo";
-        ammoTag.textContent=p.ammo;
-        s.appendChild(el);
-        s.appendChild(ammoTag);
+function destroyEnemyHarborOnEntry(state,p,r,c) {
+  const idx = state.harbors.findIndex(h=>h.r===r && h.c===c && h.color!==p.controller);
+  if (idx>=0) {
+    addLog(state, `${p.controller==="white"?"백":"흑"}이 상대 항구를 파괴.`);
+    state.harbors.splice(idx,1);
+  }
+}
+
+function removePiece(state,p,reason="사망") {
+  const idx = state.pieces.findIndex(x=>x.id===p.id);
+  if (idx<0) return;
+
+  // 가호: 합성 기물은 적용 안 됨. 교황의 3개 열 오라를 동적으로 판정.
+  const blessed = !p.synthetic && isBlessedByPope(state,p);
+  if (blessed) {
+    state.revivals.push({
+      piece: structuredClone(p),
+      dueOwnTurn: state.ownTurns[p.color] + 2
+    });
+    addLog(state, `${PIECES[p.type].name} 가호 발동: 2턴 뒤 부활 예정.`);
+  }
+
+  if (p.type === "king") {
+    state.kingDead[p.color] = true;
+    state.kingDeathOwnTurn[p.color] = state.ownTurns[p.color];
+    const prince = state.pieces.find(x=>x.color===p.color && x.prince && x.id!==p.id);
+    state.princeCoronationOwnTurn[p.color] = prince ? state.ownTurns[p.color] + 2 : null;
+    addLog(state, `${p.color==="white"?"백":"흑"} 왕 사망: 전군 혼란.`);
+  }
+
+  state.pieces.splice(idx,1);
+}
+
+function isBlessedByPope(state,p) {
+  return state.pieces.some(x =>
+    x.color===p.color &&
+    x.type==="pope" &&
+    Math.abs(x.c-p.c)<=1 &&
+    !isConfused(state,x)
+  );
+}
+
+function damageOne(state,attacker,target,amount,{instantKill=false,inflictConfusion=false}={}) {
+  if (!target) return false;
+  if (instantKill) target.hp = 0;
+  else target.hp -= amount;
+  if (inflictConfusion && target.hp>0) {
+    target.confusionUntilPly = state.ply + 3;
+    target.hp = Math.min(target.hp,0.5);
+  }
+  if (target.hp <= 0) {
+    removePiece(state,target);
+    return true;
+  }
+  return false;
+}
+
+function commandFlags(state,p) {
+  const active = (p.tempCommands||[]).filter(x=>state.ply < x.untilPly);
+  return {
+    lastStand: active.some(x=>x.kind==="lastStand"),
+    indiscriminate: active.some(x=>x.kind==="indiscriminate"),
+  };
+}
+
+function applyLastStandFloor(state,p) {
+  const f = commandFlags(state,p);
+  if (f.lastStand) return 1;
+  return 0;
+}
+
+function movePiece(state,p,tr,tc,viewer) {
+  if (!canMove(state,p,tr,tc,viewer)) return {ok:false,msg:"이동 불가"};
+  const hidden = at(state,tr,tc);
+  if (hidden && !isVisibleTo(state,hidden,viewer)) {
+    // 은신 함정: 이동한 기물이 죽음
+    addLog(state, `${PIECES[p.type].name}이 은신 기물과 충돌하여 사망.`);
+    removePiece(state,p);
+    return {ok:true, action:"move", moved:false};
+  }
+  p.r=tr;p.c=tc;
+  captureTerritory(state,p,tr,tc);
+  destroyEnemyHarborOnEntry(state,p,tr,tc);
+  checkVictory(state);
+  return {ok:true, action:"move", moved:true};
+}
+
+function barrageTargets(state,r,c) {
+  return [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
+    .filter(([rr,cc])=>inBounds(rr,cc))
+    .map(([rr,cc])=>at(state,rr,cc))
+    .filter(Boolean);
+}
+
+function attackPoint(state,p,tr,tc,viewer) {
+  const mode = attackModeFor(state,p,tr,tc);
+  if (!mode || !canAttackPoint(state,p,tr,tc,viewer)) return {ok:false,msg:"공격 불가"};
+
+  const d = pieceDef(p);
+  const amount = attackPower(state,p);
+  const primary = at(state,tr,tc);
+  const primaryWasThere = !!primary;
+  let primaryKilled = false;
+
+  if (primary) {
+    primaryKilled = damageOne(state,p,primary,amount,{inflictConfusion:!!d.inflictsConfusion});
+    addLog(state, `${d.name} 공격 → ${PIECES[primary.type].name} (${amount} 피해)`);
+  } else {
+    addLog(state, `${d.name} 좌표 포격 (${tr}, ${tc})`);
+  }
+
+  let doBarrage = hasTrait(state,p,"barrage");
+  if (d.barrageOnLand) doBarrage = isLand(tr,tc);
+  if (doBarrage) {
+    for (const t of [...barrageTargets(state,tr,tc)]) {
+      if (primary && t.id===primary.id) continue;
+      damageOne(state,p,t,amount);
+    }
+  }
+
+  const flags = commandFlags(state,p);
+  if (flags.indiscriminate) {
+    for (const t of [...barrageTargets(state,tr,tc)]) damageOne(state,p,t,999,{instantKill:true});
+  }
+
+  if (hasTrait(state,p,"glass")) {
+    const still = state.pieces.find(x=>x.id===p.id);
+    if (still) removePiece(state,still);
+  }
+
+  if (hasTrait(state,p,"berserk")) {
+    p.cooldownUntilOwnTurn = state.ownTurns[p.color] + 2;
+  }
+
+  // 이동공격: 실제 대상이 있었고 처치했을 때만 진입
+  if (mode.moving && primaryWasThere && primaryKilled) {
+    const still = state.pieces.find(x=>x.id===p.id);
+    if (still && !at(state,tr,tc) && domainAllowsMove(state,still,tr,tc)) {
+      still.r=tr; still.c=tc;
+      captureTerritory(state,still,tr,tc);
+      destroyEnemyHarborOnEntry(state,still,tr,tc);
+      checkVictory(state);
+    }
+  }
+  return {ok:true, action:"attack"};
+}
+
+function canAct(state,p,color) {
+  if (!p || p.controller!==color) return false;
+  if (p.cooldownUntilOwnTurn && state.ownTurns[p.color] < p.cooldownUntilOwnTurn) return false;
+  return true;
+}
+
+function endTurn(state) {
+  const acted = state.turn;
+  state.ownTurns[acted] += 1;
+  state.ply += 1;
+
+  // 최면 만료
+  for (const p of state.pieces) {
+    if (p.hypnosisUntilPly != null && state.ply >= p.hypnosisUntilPly) {
+      p.controller = p.color;
+      p.hypnosisUntilPly = null;
+    }
+    p.tempCommands = (p.tempCommands||[]).filter(x=>state.ply < x.untilPly);
+    const mh = maxHp(p,state);
+    if (p.hp > mh) p.hp = mh;
+  }
+
+  // 왕자 즉위
+  for (const color of ["white","black"]) {
+    const due = state.princeCoronationOwnTurn[color];
+    if (state.kingDead[color] && due != null && state.ownTurns[color] >= due) {
+      const prince = state.pieces.find(p=>p.color===color && p.prince && p.type==="pawn");
+      if (prince) {
+        prince.type="king";
+        prince.prince=false;
+        prince.hp=Math.min(Math.max(prince.hp,1),1);
+        state.kingDead[color]=false;
+        state.kingDeathOwnTurn[color]=null;
+        state.princeCoronationOwnTurn[color]=null;
+        addLog(state, `${color==="white"?"백":"흑"} 왕자 즉위. 혼란 해제.`);
       } else {
-        s.appendChild(el);
-      }
-
-      if(p.attributes){
-        const icons=Object.keys(ATTR_ICON).filter(k=>p.attributes[k]);
-        if(icons.length){
-          const tag=document.createElement("div");
-          tag.className="attr-icons";
-          tag.textContent=icons.map(k=>ATTR_ICON[k]).join("");
-          s.appendChild(tag);
-        }
-        if(p.attributes.armored){
-          const lifeTag=document.createElement("div");
-          lifeTag.className="life-tag";
-          lifeTag.textContent="♥"+p.lives;
-          s.appendChild(lifeTag);
-        }
+        state.princeCoronationOwnTurn[color]=null;
       }
     }
-
-    const sing=singularities.find(x=>x.r===r&&x.c===c);
-    if(sing){
-      s.classList.add("singularity");
-      if(sing.needsRepair)s.classList.add("singularity-needs-repair");
-    }
-
-    if(selected?.r===r&&selected?.c===c)s.classList.add("selected");
-    if(moves2.some(x=>x.r===r&&x.c===c)||carrierMoves.some(x=>x.r===r&&x.c===c)){s.classList.add("possible");if(p)s.classList.add("capture");else s.classList.add("empty")}
-    if(guns.some(x=>x.r===r&&x.c===c)||turrets.some(x=>x.r===r&&x.c===c)||subTargets.some(x=>x.r===r&&x.c===c))s.classList.add("attack");
-    if(selected&&pieceAt(selected.r,selected.c)?.type==="battleship"&&getBattleshipBlast(selected.r,selected.c).some(x=>x.r===r&&x.c===c))s.classList.add("attack");
-    if(singularityTargets.some(x=>x.r===r&&x.c===c))s.classList.add("singularity-target");
-
-    s.addEventListener("click",()=>handleSquareClick(r,c));
-    s.addEventListener("contextmenu",e=>{e.preventDefault();handleSquareRightClick(r,c)});
-    board.appendChild(s);
-  }
-}
-
-async function handleSquareClick(r,c){
-  if(gameEnded)return;
-
-  /*
-   * 배치를 기다리는 연성 기물이 있으면, 보드 클릭은 오직
-   * (지배하는 빈 칸에) 배치하는 동작으로만 취급된다.
-   */
-  if(pendingForge?.[myColor]){
-    if(isPlaceable(r,c)){
-      sendAction({type:"placeForged",r,c});
-    }
-    return;
   }
 
-  /*
-   * 적에게 점령당했다가 벗어난 자신의 특이점을 클릭하면 수리(턴 소모)한다.
-   */
-  const sing=singularities.find(s=>s.r===r&&s.c===c&&s.color===myColor&&s.needsRepair);
-  if(sing&&currentTurn===myColor){
-    const occupant=boardState[r][c];
-    if(!occupant||occupant.color===myColor){
-      sendAction({type:"repairSingularity",r,c});
-      selected=null;
-      return;
+  // 부활
+  for (let i=state.revivals.length-1;i>=0;i--) {
+    const rv=state.revivals[i], color=rv.piece.color;
+    if (state.ownTurns[color] >= rv.dueOwnTurn) {
+      const {r,c}=rv.piece.origin;
+      if (!at(state,r,c)) {
+        const p=rv.piece;
+        p.id=id(); p.r=r;p.c=c;p.hp=maxHp(p,state);
+        p.prince=false;p.controller=p.color;p.hypnosisUntilPly=null;
+        state.pieces.push(p);
+        addLog(state, `${PIECES[p.type].name} 가호 부활 성공.`);
+      } else addLog(state, `${PIECES[rv.piece.type].name} 가호 부활 실패: 원래 자리가 막힘.`);
+      state.revivals.splice(i,1);
     }
   }
 
-  if(currentTurn!==myColor)return;
-
-  const p=pieceAt(r,c);
-  if(!selected){
-    if(p?.color===myColor){selected={r,c};drawBoard()}
-    return;
-  }
-
-  const fr=selected.r,fc=selected.c,sp=pieceAt(fr,fc);
-
-  if(fr===r&&fc===c){
-    /*
-     * 전함은 대상을 따로 고르지 않고 자기 자신을 다시 클릭하면
-     * 3*3 포격이 즉시 발동한다.
-     */
-    if(sp?.type==="battleship"&&sp.color===myColor&&getBattleshipBlast(fr,fc).length){
-      sendAction({type:"battleshipAttack",fr,fc});
-      selected=null;
-      return;
-    }
-    selected=null;drawBoard();return;
-  }
-
-  if(sp?.type==="submarine"&&getSubmarineTargets(fr,fc).some(x=>x.r===r&&x.c===c)){
-    sendAction({type:"submarineAttack",fr,fc,tr:r,tc:c});
-    selected=null;
-    return;
-  }
-
-  if(sp?.type==="carrier"&&getCarrierMoves(fr,fc).some(x=>x.r===r&&x.c===c)){
-    sendAction({type:"carrierMove",fr,fc,tr:r,tc:c});
-    selected=null;
-    return;
-  }
-
-  if(sp?.gun&&getGunTargets(fr,fc).some(x=>x.r===r&&x.c===c)){
-    sendAction({type:"gunAttack",fr,fc,tr:r,tc:c});
-    selected=null;
-    return;
-  }
-
-  if(sp?.type==="turret"&&getTurretTargets(fr,fc).some(x=>x.r===r&&x.c===c)){
-    sendAction({type:"turretAttack",fr,fc,tr:r,tc:c});
-    selected=null;
-    return;
-  }
-
-  if(getMoves(fr,fc).some(x=>x.r===r&&x.c===c)){
-    let promotion=null;
-    if(eligibleFreePromotion(fr,fc,r,c)){promotion=await showPromotion()}
-    sendAction({type:"move",fr,fc,tr:r,tc:c,promotion});
-    selected=null;
-    return;
-  }
-
-  if(p?.color===myColor){selected={r,c};drawBoard();return}
+  state.turn = other(acted);
+  if (!state.winner) addLog(state, `${state.turn==="white"?"백":"흑"}의 차례.`);
 }
 
-/*
- * 우클릭: 선택된 기물이 자신의 네크로맨서일 때, 주위 3*3의 빈 칸에 특이점을 생성한다.
- */
-function handleSquareRightClick(r,c){
-  if(gameEnded||currentTurn!==myColor||!selected)return;
-  const targets=getSingularityTargets(selected.r,selected.c);
-  if(targets.some(x=>x.r===r&&x.c===c)){
-    sendAction({type:"createSingularity",necroR:selected.r,necroC:selected.c,r,c});
-    selected=null;
-    drawBoard();
+function canAppointPrince(state,color) {
+  if (!state.kingDead[color]) return true;
+  const deadAt = state.kingDeathOwnTurn[color];
+  return deadAt != null && state.ownTurns[color] >= deadAt + 4;
+}
+
+function appointPrince(state,p) {
+  const color=state.turn;
+  if (!canAppointPrince(state,color)) return {ok:false,msg:"아직 왕자를 정할 수 없음."};
+  if (!p || p.controller!==color || p.color!==color || p.type!=="pawn") return {ok:false,msg:"자기 폰만 왕자로 지정 가능."};
+  for (const x of state.pieces) if (x.color===color) x.prince=false;
+  p.prince=true;
+  if (state.kingDead[color]) state.princeCoronationOwnTurn[color] = state.ownTurns[color] + 2;
+  addLog(state, `${color==="white"?"백":"흑"} 왕자 지정.`);
+  return {ok:true};
+}
+
+function canInstallHarbor(state,color,r,c) {
+  if (!state.loadouts[color]?.includes("fleet_tree")) return false;
+  if (state.portsPlaced[color]>=3) return false;
+  if (!isLand(r,c) || at(state,r,c) || harborAt(state,r,c)) return false;
+  return [[1,0],[-1,0],[0,1],[0,-1]].some(([dr,dc])=>{
+    const rr=r+dr,cc=c+dc;
+    return isSea(rr,cc) && state.territory[key(rr,cc)]===color;
+  });
+}
+
+function installHarbor(state,color,r,c) {
+  if (!canInstallHarbor(state,color,r,c)) return {ok:false,msg:"항구 설치 불가"};
+  state.harbors.push({id:id(),color,r,c});
+  state.portsPlaced[color]+=1;
+  addLog(state, `${color==="white"?"백":"흑"} 항구 설치 (${state.portsPlaced[color]}/3)`);
+  return {ok:true};
+}
+
+function canPlaceCraft(state,color,type,r,c) {
+  const d=PIECES[type];
+  if (!d) return false;
+  if (at(state,r,c)) return false;
+  if (d.naval) {
+    if (!isSea(r,c) || state.territory[key(r,c)]!==color) return false;
+    return state.harbors.some(h =>
+      h.color===color &&
+      Math.abs(h.r-r)+Math.abs(h.c-c)===1
+    );
+  }
+  return isLand(r,c) && state.territory[key(r,c)]===color;
+}
+
+function placeCraft(state,color,type,r,c) {
+  if (!canPlaceCraft(state,color,type,r,c)) return {ok:false,msg:"배치 불가"};
+  const p=makePiece(type,color,r,c);
+  p.synthetic=true;
+  state.pieces.push(p);
+  addLog(state, `${PIECES[type].name} 배치.`);
+  return {ok:true,piece:p};
+}
+
+function consumePieces(state,ids) {
+  state.pieces = state.pieces.filter(p=>!ids.includes(p.id));
+}
+
+function applyHypnosis(state,caster,target) {
+  if (!caster || caster.type!=="hypnotist" || isConfused(state,caster)) return {ok:false,msg:"최면 사용 불가"};
+  if (!target || target.controller===caster.controller) return {ok:false,msg:"상대 기물만 가능"};
+  if (Math.max(Math.abs(caster.r-target.r),Math.abs(caster.c-target.c))>2) return {ok:false,msg:"최면 범위 밖"};
+  target.controller=caster.controller;
+  target.hypnosisUntilPly=state.ply+3;
+  addLog(state, `${PIECES[target.type].name} 최면: 3수 동안 ${caster.controller==="white"?"백":"흑"} 통제.`);
+  return {ok:true};
+}
+
+function applyCommand(state,commander,target,kind) {
+  if (!commander || commander.type!=="commander" || isConfused(state,commander)) return {ok:false,msg:"지휘 사용 불가"};
+  if (!target || target.controller!==commander.controller) return {ok:false,msg:"아군 기물만 지휘 가능"};
+  if (Math.max(Math.abs(commander.r-target.r),Math.abs(commander.c-target.c))>2) return {ok:false,msg:"지휘 범위 밖"};
+  target.tempCommands = (target.tempCommands||[]).filter(x=>x.kind!==kind);
+  target.tempCommands.push({kind,untilPly:state.ply+3});
+  if (kind==="lastStand") target.hp += 1;
+  addLog(state, `${PIECES[target.type].name}에 ${kind==="lastStand"?"최후의 저항":"무차별 공격"} 부여.`);
+  return {ok:true};
+}
+
+function isOverwhelmed(state,p) {
+  if (isConfused(state,p)) return false;
+  return state.pieces.some(h =>
+    h.type==="hero" &&
+    h.controller!==p.controller &&
+    !isConfused(state,h) &&
+    Math.max(Math.abs(h.r-p.r),Math.abs(h.c-p.c))<=2
+  );
+}
+
+function normalizeHpAfterStateEffects(state) {
+  for (const p of state.pieces) {
+    const mh=maxHp(p,state) + applyLastStandFloor(state,p);
+    if (p.hp>mh) p.hp=mh;
   }
 }
 
-document.addEventListener("keydown",e=>{
-  if(e.key.toLowerCase()!=="g"||!selected||currentTurn!==myColor)return;
-  const p=boardState[selected.r][selected.c];
-  if(p?.type==="pawn"&&!p.gun){sendAction({type:"gun",r:selected.r,c:selected.c});selected=null}
-});
+// ===== UI / 네트워크 클라이언트 =====
 
-function renderMoves(){
-  const list=document.getElementById("moveList");
-  list.innerHTML="";
-  for(let i=0;i<moves.length;i+=2){
-    const row=document.createElement("div");
-    row.className="move";
-    row.textContent=`${i/2+1}. ${moves[i]||""}${moves[i+1]?" "+moves[i+1]:""}`;
-    list.appendChild(row);
-  }
-  list.scrollTop=list.scrollHeight;
-}
-
-function formatTime(s){return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")}
-
-function updateUI(){
-  const elapsed=Math.floor((Date.now()-lastStateAt)/1000);
-  const shownWhite=Math.max(0,time.white-(currentTurn==="white"&&!gameEnded?elapsed:0));
-  const shownBlack=Math.max(0,time.black-(currentTurn==="black"&&!gameEnded?elapsed:0));
-
-  document.getElementById("whiteTimer").textContent=formatTime(shownWhite);
-  document.getElementById("blackTimer").textContent=formatTime(shownBlack);
-  document.getElementById("whitePlayer").classList.toggle("active",currentTurn==="white");
-  document.getElementById("blackPlayer").classList.toggle("active",currentTurn==="black");
-
-  let st=document.getElementById("status");
-  st.textContent=gameEnded?"GAME OVER":currentTurn===myColor?"YOUR TURN":"OPPONENT'S TURN";
-
-  document.getElementById("whiteScore").textContent=`${score.white}점`;
-  document.getElementById("blackScore").textContent=`${score.black}점`;
-  document.getElementById("moveCounter").textContent=`전체 수: ${moveCount}`;
-
-  const colossusAvailable=(colossusReady[myColor]||colossusSacrificeReady[myColor]);
-  document.getElementById("colossusButton").classList.toggle("hidden",!colossusAvailable||currentTurn!==myColor||gameEnded);
-
-  renderForge();
-}
-
-document.getElementById("restartButton").addEventListener("click",()=>sendAction({type:"restart"}));
-document.getElementById("colossusButton").addEventListener("click",()=>{
-  const raw=prompt("거신병을 소환할 빈 칸을 입력하세요. 예: e4");
-  if(!raw)return;
-  const f=raw.toLowerCase().match(/^([a-h])([1-8])$/);
-  if(!f)return alert("칸 입력이 잘못되었습니다.");
-  const c="abcdefgh".indexOf(f[1]),r=8-Number(f[2]);
-  sendAction({type:"summonColossus",r,c});
-});
-
-connect();
-
-clearInterval(localTimer);
-localTimer=setInterval(()=>{if(boardState)updateUI()},250);

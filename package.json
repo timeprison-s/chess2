@@ -1,8 +1,12 @@
 {
-  "name":"custom-chess-online",
-  "version":"1.4.0",
-  "description":"Custom chess online",
-  "main":"server.js",
-  "scripts":{"start":"node server.js"},
-  "dependencies":{"ws":"^8.18.0"}
+  "name": "gaejamchess-alpha",
+  "version": "0.1.0",
+  "private": true,
+  "description": "개잼체스 1.0 alpha",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
 }
