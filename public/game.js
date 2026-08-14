@@ -764,6 +764,23 @@ function svgWrap(body, label="기물") {
   return `<svg class="piece-art" viewBox="0 0 48 48" role="img" aria-label="${label}" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
 }
 
+
+function princeCrownArt() {
+  return `<svg viewBox="0 0 32 22" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <path d="M3 6l7 5 6-9 6 9 7-5-3 13H6L3 6z"
+      fill="currentColor" stroke="rgba(35,29,10,.85)" stroke-width="1.2" stroke-linejoin="round"/>
+    <path d="M7 17h18" fill="none" stroke="rgba(255,245,188,.75)" stroke-width="1.2"/>
+  </svg>`;
+}
+
+function harborArt() {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <path d="M12 3v13M8 7h8M7 13c0 4 2 7 5 8 3-1 5-4 5-8M4 14c1 5 4 8 8 8s7-3 8-8"
+      fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="12" cy="4" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/>
+  </svg>`;
+}
+
 function pieceArt(type) {
   const name = PIECES[type]?.name || type;
   if (CHESS_GLYPHS[type]) {
@@ -810,7 +827,6 @@ const screens = {
 };
 
 const boardEl = $("#board");
-const statusEl = $("#status");
 const sideEl = $("#sidePanel");
 const toastEl = $("#toast");
 
@@ -1211,8 +1227,21 @@ function startGame() {
 
 function buildBoard() {
   boardEl.innerHTML = "";
-  for (let r = 0; r < SIZE; r++) {
-    for (let c = 0; c < SIZE; c++) {
+
+  const rows = Array.from({length: SIZE}, (_, i) => i);
+  const cols = Array.from({length: SIZE}, (_, i) => i);
+
+  // 온라인에서 흑으로 들어온 플레이어는 일반 체스처럼 흑 진영이 아래에 오도록 180도 회전.
+  if (!localMode && myColor === "black") {
+    rows.reverse();
+    cols.reverse();
+    boardEl.dataset.perspective = "black";
+  } else {
+    boardEl.dataset.perspective = "white";
+  }
+
+  for (const r of rows) {
+    for (const c of cols) {
       const cell = document.createElement("div");
       cell.className = "cell";
       cell.dataset.r = r;
@@ -1667,11 +1696,7 @@ function render() {
   if (!state) return;
 
   const viewer = localMode ? state.turn : myColor;
-  statusEl.innerHTML = state.winner
-    ? `<b>${state.winner === "white" ? "백" : "흑"} 승리</b> · 육지 전체 지배`
-    : `<b>${state.turn === "white" ? "백" : "흑"} 차례</b> · ${state.ply + 1}수`;
-
-  const selected = currentPiece();
+const selected = currentPiece();
 
   $$(".cell").forEach(cell => {
     const r = +cell.dataset.r;
@@ -1684,7 +1709,8 @@ function render() {
     if (h) {
       const port = document.createElement("span");
       port.className = `harbor ${h.color}`;
-      port.textContent = "항";
+      port.innerHTML = harborArt();
+      port.title = "항구";
       cell.appendChild(port);
     }
 
@@ -1693,7 +1719,13 @@ function render() {
       const chip = document.createElement("span");
       chip.className = `piece ${p.controller} ${p.prince ? "prince" : ""}`;
       chip.innerHTML = pieceArt(p.type);
-      chip.title = `${PIECES[p.type].name} HP ${p.hp}`;
+      if (p.prince) {
+        const crown = document.createElement("span");
+        crown.className = "prince-crown";
+        crown.innerHTML = princeCrownArt();
+        chip.appendChild(crown);
+      }
+      chip.title = `${PIECES[p.type].name}${p.prince ? " · 왕자" : ""} HP ${p.hp}`;
       const draggable = canControlTurn() && p.controller === state.turn;
       chip.draggable = false;
       if (draggable) {
@@ -1729,13 +1761,7 @@ function render() {
     }
   });
   $("#endAction").classList.toggle("hidden", !subAction);
-
-  const load = state.loadouts[state.turn] || [];
-  $("#turnLoadout").textContent = load
-    .map(x => LOADOUTS.find(y => y[0] === x)?.[1] || x)
-    .join(" · ");
-
-  $("#harborCount").textContent = `${state.portsPlaced[state.turn]}/3`;
+$("#harborCount").textContent = `${state.portsPlaced[state.turn]}/3`;
 
   renderPlayers();
   renderSide(selected);
@@ -1745,14 +1771,20 @@ function render() {
 
 function renderPlayers() {
   const box = $("#gamePlayers");
+
+  const statusFor = color => {
+    if (state.winner) return state.winner === color ? "WIN" : "LOSE";
+    return state.turn === color ? "TURN" : "";
+  };
+
   box.innerHTML = `
-    <div class="game-player-card ${state.turn === "white" ? "turn" : ""}">
-      <div class="player-line"><span>Player 1</span><span>백</span></div>
-      <div class="game-clock" data-clock="white">10:00</div>
+    <div class="game-player-card ${state.turn === "white" && !state.winner ? "turn" : ""}">
+      <div class="player-line"><span>Player 1</span><span>백 · ${statusFor("white")}</span></div>
+      <div class="game-clock" id="whiteClock">${formatClock(clockRemaining("white"))}</div>
     </div>
-    <div class="game-player-card ${state.turn === "black" ? "turn" : ""}">
-      <div class="player-line"><span>Player 2</span><span>흑</span></div>
-      <div class="game-clock" data-clock="black">10:00</div>
+    <div class="game-player-card ${state.turn === "black" && !state.winner ? "turn" : ""}">
+      <div class="player-line"><span>Player 2</span><span>흑 · ${statusFor("black")}</span></div>
+      <div class="game-clock" id="blackClock">${formatClock(clockRemaining("black"))}</div>
     </div>
   `;
 }
