@@ -435,7 +435,14 @@ input:focus { border-color: var(--line-strong); }
   grid-template-columns: repeat(3,1fr);
   border: 1px solid var(--line-strong);
 }
-.forge-slots div { border: 1px solid rgba(255,255,255,.08); }
+.forge-slots div { border: 1px solid rgba(255,255,255,.08); display:grid; place-items:center; position:relative; }
+.forge-slots div.drop-ready { background:rgba(255,255,255,.055); }
+.forge-slots.drag-over { border-color:rgba(255,255,255,.55); background:rgba(255,255,255,.045); }
+.forge-slot-piece { width:26px; height:26px; color:#e8ebef; cursor:pointer; }
+.forge-slot-piece .piece-art { width:100%; height:100%; }
+.forge-slot-piece.white { color:#f2f3ef; }
+.forge-slot-piece.black { color:#303640; }
+.forge-hint { color:#69717c; font-size:9px; text-align:center; margin-top:7px; }
 .forge-slots div.filled { background: rgba(255,255,255,.20); }
 .forge-arrow { color: #727b87; padding: 7px; }
 .forge-output {
@@ -512,19 +519,28 @@ input:focus { border-color: var(--line-strong); }
 .piece {
   position: relative;
   z-index: 2;
-  width: 29px;
-  height: 29px;
-  border-radius: 50%;
+  width: 88%;
+  height: 88%;
   display: grid;
   place-items: center;
-  font-weight: 900;
-  font-size: 13px;
-  box-shadow: 0 2px 5px rgba(0,0,0,.6);
-  border: 2px solid;
+  color: #f2f3ef;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,.72));
+  user-select: none;
 }
-.piece.white { background:#f1f2ef;color:#15171b;border-color:#fff; }
-.piece.black { background:#15191e;color:#f5f5f2;border-color:#52606f; }
-.piece.prince { outline:3px solid #d7bf65; }
+.piece.white { color:#f3f3ef; }
+.piece.black { color:#11151a; filter: drop-shadow(0 0 1px rgba(235,239,244,.9)) drop-shadow(0 2px 3px rgba(0,0,0,.75)); }
+.piece[draggable="true"] { cursor: grab; }
+.piece[draggable="true"]:active { cursor: grabbing; }
+.piece.prince { filter: drop-shadow(0 0 4px rgba(215,191,101,.95)) drop-shadow(0 2px 3px rgba(0,0,0,.7)); }
+.piece-art { width:100%; height:100%; display:block; overflow:visible; }
+.piece-art .body { fill:currentColor; stroke:rgba(0,0,0,.58); stroke-width:1.1; vector-effect:non-scaling-stroke; }
+.piece.black .piece-art .body { stroke:rgba(236,240,245,.74); }
+.piece-art .line { fill:none; stroke:currentColor; stroke-width:2.3; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+.piece-art .cut { fill:#20252b; stroke:none; }
+.piece.white .piece-art .cut { fill:#3b4148; }
+.piece-art .glyph { fill:currentColor; font-family:"DejaVu Serif","Noto Serif Symbols 2",serif; font-size:39px; text-anchor:middle; dominant-baseline:central; paint-order:stroke; stroke:rgba(0,0,0,.65); stroke-width:1.25px; }
+.piece.black .piece-art .glyph { stroke:rgba(236,240,245,.72); }
+
 .hp {
   position:absolute;
   right:2px;
@@ -666,3 +682,11 @@ input:focus { border-color: var(--line-strong); }
   :root { --cell:6.45vw; }
   .center-screen { padding:12px; }
 }
+
+.cell.legal-both { box-shadow: inset 0 0 0 2px #9a82b5, inset 0 0 0 5px rgba(154,130,181,.28); }
+.action-chooser {
+  position:fixed; z-index:120; display:flex; gap:6px; padding:7px;
+  background:rgba(10,12,15,.94); border:1px solid rgba(255,255,255,.16);
+  border-radius:11px; box-shadow:0 12px 34px rgba(0,0,0,.5); backdrop-filter:blur(14px);
+}
+.action-chooser button { padding:8px 12px; font-size:11px; font-weight:800; }

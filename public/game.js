@@ -1,4 +1,4 @@
-// 개잼체스 1.0 Alpha v0.1.1
+// 개잼체스 1.0 Alpha v0.3.0
 // pieces + engine + UI/network client
 
 // ===== 기물 / 특성 / 조합 =====
@@ -752,6 +752,48 @@ function normalizeHpAfterStateEffects(state) {
   }
 }
 
+
+// ===== 기물 SVG 이미지 =====
+const CHESS_GLYPHS = {
+  pawn:"♟", rook:"♜", knight:"♞", bishop:"♝", queen:"♛", king:"♚"
+};
+
+function svgWrap(body, label="기물") {
+  return `<svg class="piece-art" viewBox="0 0 48 48" role="img" aria-label="${label}" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
+}
+
+function pieceArt(type) {
+  const name = PIECES[type]?.name || type;
+  if (CHESS_GLYPHS[type]) {
+    return svgWrap(`<text class="glyph" x="24" y="25">${CHESS_GLYPHS[type]}</text>`, name);
+  }
+
+  const art = {
+    cavalry: `<path class="body" d="M13 39h25l-2-6-7-3 5-5-2-10-6-6-9 3 5 6-9 5-3 9z"/><circle class="cut" cx="27" cy="15" r="1.7"/>`,
+    tank: `<rect class="body" x="8" y="29" width="32" height="8" rx="3"/><rect class="body" x="14" y="22" width="18" height="8" rx="2"/><rect class="body" x="20" y="17" width="10" height="6" rx="2"/><rect class="body" x="28" y="18" width="13" height="3" rx="1.5"/><circle class="cut" cx="15" cy="34" r="2"/><circle class="cut" cx="24" cy="34" r="2"/><circle class="cut" cx="33" cy="34" r="2"/>`,
+    heavyTank: `<rect class="body" x="6" y="28" width="36" height="10" rx="3"/><rect class="body" x="12" y="20" width="22" height="9" rx="2"/><rect class="body" x="18" y="14" width="14" height="7" rx="2"/><rect class="body" x="30" y="16" width="14" height="4" rx="2"/><circle class="cut" cx="13" cy="34" r="2.2"/><circle class="cut" cx="22" cy="34" r="2.2"/><circle class="cut" cx="31" cy="34" r="2.2"/><circle class="cut" cx="38" cy="34" r="2.2"/>`,
+    superHeavyTank: `<rect class="body" x="4" y="28" width="40" height="11" rx="3"/><rect class="body" x="10" y="18" width="25" height="11" rx="2"/><rect class="body" x="16" y="12" width="17" height="7" rx="2"/><rect class="body" x="31" y="14" width="14" height="3" rx="1.5"/><rect class="body" x="31" y="19" width="14" height="3" rx="1.5"/><circle class="cut" cx="11" cy="34" r="2.2"/><circle class="cut" cx="20" cy="34" r="2.2"/><circle class="cut" cx="29" cy="34" r="2.2"/><circle class="cut" cx="38" cy="34" r="2.2"/>`,
+    rocket: `<path class="body" d="M26 5c7 5 10 14 8 23l-8 8-7-7c0-10 2-18 7-24z"/><path class="body" d="M19 25l-7 4 4 4zM31 29l5 8 3-9z"/><circle class="cut" cx="27" cy="17" r="3"/><path class="body" d="M22 34l4 9 4-9z"/>`,
+    commander: `<path class="body" d="M9 35h30l-3-12-12-7-12 7z"/><path class="body" d="M16 15l8-10 8 10-8 4z"/><path class="cut" d="M24 22l2 4 5 .7-3.5 3.3.8 5-4.3-2.2-4.3 2.2.8-5-3.5-3.3 5-.7z"/>`,
+    infantry: `<circle class="body" cx="21" cy="13" r="6"/><path class="body" d="M13 40l2-17 6-4 7 5 5 16z"/><path class="line" d="M29 21l11 16M34 26l5-3"/>`,
+    kamikaze: `<circle class="body" cx="24" cy="28" r="13"/><path class="line" d="M29 15c2-6 6-8 11-7"/><path class="line" d="M37 8l4-3"/><path class="cut" d="M17 26h14v4H17z"/>`,
+    viking: `<path class="body" d="M12 24c2-9 7-14 12-14s10 5 12 14v14H12z"/><path class="body" d="M15 20C8 18 5 13 6 8c5 5 9 5 13 4zM33 20c7-2 10-7 9-12-5 5-9 5-13 4z"/><rect class="cut" x="18" y="25" width="12" height="4" rx="2"/>`,
+    pope: `<path class="body" d="M17 39h14l3-16-10-17-10 17z"/><path class="line" d="M24 5v18M18 13h12"/><path class="body" d="M12 40h24v4H12z"/>`,
+    ninja: `<circle class="body" cx="24" cy="22" r="15"/><path class="cut" d="M11 20c8-4 18-4 26 0v8c-9-3-17-3-26 0z"/><circle class="body" cx="19" cy="23" r="1.6"/><circle class="body" cx="29" cy="23" r="1.6"/><path class="body" d="M16 34h16l5 10H11z"/>`,
+    radar: `<path class="body" d="M9 10c14 0 25 11 25 25H9z"/><path class="line" d="M13 34L37 10M24 34v9M17 43h14"/><circle class="body" cx="36" cy="10" r="3"/>`,
+    hypnotist: `<path class="line" d="M24 7c11 0 17 8 17 17S34 41 24 41 7 34 7 24 14 9 24 9c8 0 13 6 13 13s-5 12-12 12-11-4-11-10 4-9 9-9 8 3 8 7-3 7-7 7-6-2-6-5 2-4 4-4"/>`,
+    hero: `<path class="body" d="M24 5l5.5 11.2L42 18l-9 8.8 2.2 12.4L24 33.4 12.8 39.2 15 26.8 6 18l12.5-1.8z"/><path class="cut" d="M21 16h6v13h-6zM17 21h14v5H17z"/>`,
+    necromancer: `<circle class="body" cx="22" cy="18" r="9"/><circle class="cut" cx="19" cy="17" r="2"/><circle class="cut" cx="25" cy="17" r="2"/><path class="cut" d="M18 23h8v3h-8z"/><path class="body" d="M13 42l3-16h12l5 16z"/><path class="line" d="M35 8v34M31 12h8"/>`,
+    fleetFrame: `<path class="body" d="M7 31h34l-5 9H13z"/><path class="line" d="M12 27h24M17 27V16M24 27V10M31 27V18"/>`,
+    submarine: `<path class="body" d="M7 28c5-8 29-8 34 0-5 8-29 8-34 0z"/><rect class="body" x="21" y="17" width="8" height="7" rx="2"/><path class="line" d="M25 17v-5h7"/><circle class="cut" cx="15" cy="28" r="1.4"/><circle class="cut" cx="33" cy="28" r="1.4"/>`,
+    battleship: `<path class="body" d="M5 31h38l-6 9H12z"/><rect class="body" x="12" y="24" width="23" height="7"/><rect class="body" x="19" y="17" width="10" height="7"/><path class="line" d="M26 19h15M17 26H7"/>`,
+    superBattleship: `<path class="body" d="M3 31h42l-7 10H10z"/><rect class="body" x="9" y="23" width="30" height="8"/><rect class="body" x="18" y="15" width="13" height="8"/><path class="line" d="M29 17h16M29 21h16M18 26H4M18 29H4"/>`,
+    carrier: `<path class="body" d="M4 30h40l-6 10H10z"/><path class="body" d="M8 18h33l3 9H5z"/><rect class="body" x="12" y="12" width="7" height="6"/><path class="line" d="M23 21h13M29 18l7 6M36 18l-7 6"/>`
+  };
+  return svgWrap(art[type] || `<path class="body" d="M10 10h28v28H10z"/>`, name);
+}
+
+
 // ===== UI / 온라인 =====
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -783,7 +825,6 @@ let state = null;
 
 let chosenLoadout = new Set();
 let selectedId = null;
-let actionMode = "move";
 let subAction = null;
 let uiMode = null;
 let forgeIds = [];
@@ -1157,6 +1198,7 @@ $("#localTest").onclick = () => {
 function startGame() {
   showScreen("game");
   buildBoard();
+  setupForgeDnD();
   render();
 }
 
@@ -1168,7 +1210,7 @@ function buildBoard() {
       cell.className = "cell";
       cell.dataset.r = r;
       cell.dataset.c = c;
-      cell.onclick = () => cellClick(r, c);
+      cell.onclick = (e) => cellClick(r, c, e);
       boardEl.appendChild(cell);
     }
   }
@@ -1179,8 +1221,8 @@ function canControlTurn() {
 }
 
 function clearTransient() {
+  closeActionChooser();
   selectedId = null;
-  actionMode = "move";
   subAction = null;
   uiMode = null;
   forgeIds = [];
@@ -1208,8 +1250,63 @@ function currentPiece() {
   return state?.pieces.find(p => p.id === selectedId) || null;
 }
 
-function cellClick(r, c) {
+
+function allowedActionsFor(p) {
+  if (!subAction || subAction.pieceId !== p.id) return {move:true, attack:true};
+  const traits = effectiveTraits(state, p);
+  if (traits.includes("breakthrough")) {
+    return {move:!subAction.moved, attack:!subAction.attacked};
+  }
+  if (traits.includes("mobility")) {
+    return {move:subAction.moved && !subAction.secondMove, attack:false};
+  }
+  return {move:false, attack:false};
+}
+
+function closeActionChooser() {
+  const box = $("#actionChooser");
+  box.classList.add("hidden");
+  box.innerHTML = "";
+}
+
+function showActionChooser(event, choices) {
+  const box = $("#actionChooser");
+  box.innerHTML = "";
+  for (const choice of choices) {
+    const b = document.createElement("button");
+    b.textContent = choice.label;
+    b.addEventListener("click", e => {
+      e.stopPropagation();
+      closeActionChooser();
+      choice.run();
+    });
+    box.appendChild(b);
+  }
+  box.style.left = `${Math.min(window.innerWidth - 150, Math.max(10, event.clientX + 8))}px`;
+  box.style.top = `${Math.min(window.innerHeight - 70, Math.max(10, event.clientY + 8))}px`;
+  box.classList.remove("hidden");
+}
+
+document.addEventListener("click", e => {
+  if (!e.target.closest("#actionChooser")) closeActionChooser();
+});
+
+function executeMove(sel, r, c) {
+  const res = movePiece(state, sel, r, c, state.turn);
+  if (!res.ok) return toast(res.msg);
+  handleActionContinuation(sel, "move");
+}
+
+function executeAttack(sel, r, c) {
+  if (isOverwhelmed(state, sel)) return toast("압도: 공격 불가.");
+  const res = attackPoint(state, sel, r, c, state.turn);
+  if (!res.ok) return toast(res.msg);
+  handleActionContinuation(sel, "attack");
+}
+
+function cellClick(r, c, event) {
   if (!state || state.winner || !canControlTurn()) return;
+  closeActionChooser();
 
   if (pendingCraft) {
     if (canPlaceCraft(state, state.turn, pendingCraft, r, c)) {
@@ -1231,15 +1328,6 @@ function cellClick(r, c) {
 
   const clicked = at(state, r, c);
 
-  if (uiMode === "forge") {
-    if (clicked && clicked.controller === state.turn) {
-      if (forgeIds.includes(clicked.id)) forgeIds = forgeIds.filter(x => x !== clicked.id);
-      else if (forgeIds.length < 9) forgeIds.push(clicked.id);
-      render();
-    }
-    return;
-  }
-
   if (uiMode === "prince") {
     const res = appointPrince(state, clicked);
     if (res.ok) finishTurn();
@@ -1257,12 +1345,7 @@ function cellClick(r, c) {
 
   if (uiMode === "commandLast" || uiMode === "commandInd") {
     const cmd = currentPiece();
-    const res = applyCommand(
-      state,
-      cmd,
-      clicked,
-      uiMode === "commandLast" ? "lastStand" : "indiscriminate"
-    );
+    const res = applyCommand(state, cmd, clicked, uiMode === "commandLast" ? "lastStand" : "indiscriminate");
     if (res.ok) {
       uiMode = null;
       render();
@@ -1272,11 +1355,9 @@ function cellClick(r, c) {
   }
 
   const sel = currentPiece();
-
   if (!sel) {
     if (clicked && canAct(state, clicked, state.turn)) {
       selectedId = clicked.id;
-      actionMode = "move";
       subAction = null;
       render();
     }
@@ -1290,25 +1371,24 @@ function cellClick(r, c) {
     return;
   }
 
-  if (clicked && canAct(state, clicked, state.turn) && !subAction) {
-    selectedId = clicked.id;
-    actionMode = "move";
-    render();
+  const allowed = allowedActionsFor(sel);
+  const legalMove = allowed.move && canMove(state, sel, r, c, state.turn);
+  const legalAttack = allowed.attack && !isOverwhelmed(state, sel) && canAttackPoint(state, sel, r, c, state.turn);
+
+  if (legalMove && legalAttack) {
+    showActionChooser(event, [
+      {label:"이동", run:()=>executeMove(sel,r,c)},
+      {label:"공격", run:()=>executeAttack(sel,r,c)},
+    ]);
     return;
   }
+  if (legalAttack) return executeAttack(sel, r, c);
+  if (legalMove) return executeMove(sel, r, c);
 
-  if (isOverwhelmed(state, sel) && actionMode === "attack") {
-    return toast("압도: 공격 불가.");
-  }
-
-  if (actionMode === "move") {
-    const res = movePiece(state, sel, r, c, state.turn);
-    if (!res.ok) return toast(res.msg);
-    handleActionContinuation(sel, "move");
-  } else {
-    const res = attackPoint(state, sel, r, c, state.turn);
-    if (!res.ok) return toast(res.msg);
-    handleActionContinuation(sel, "attack");
+  // 공격할 수 없는 자기 기물을 누르면 선택 전환.
+  if (clicked && canAct(state, clicked, state.turn) && !subAction) {
+    selectedId = clicked.id;
+    render();
   }
 }
 
@@ -1319,12 +1399,10 @@ function handleActionContinuation(piece, kind) {
   const traits = effectiveTraits(state, still);
 
   if (traits.includes("breakthrough")) {
-    subAction = subAction || {pieceId: still.id, moved: false, attacked: false};
+    subAction = subAction || {pieceId:still.id, moved:false, attacked:false};
     if (kind === "move") subAction.moved = true;
     if (kind === "attack") subAction.attacked = true;
     if (subAction.moved && subAction.attacked) return finishTurn();
-
-    actionMode = subAction.moved ? "attack" : "move";
     selectedId = still.id;
     render();
     sendState();
@@ -1332,12 +1410,17 @@ function handleActionContinuation(piece, kind) {
   }
 
   if (traits.includes("mobility") && kind === "move") {
-    subAction = {pieceId: still.id, moved: true, attacked: false};
-    actionMode = "move";
-    selectedId = still.id;
-    render();
-    sendState();
-    return;
+    if (!subAction) {
+      subAction = {pieceId:still.id, moved:true, secondMove:false};
+      selectedId = still.id;
+      render();
+      sendState();
+      return;
+    }
+    if (subAction.pieceId === still.id && !subAction.secondMove) {
+      subAction.secondMove = true;
+      return finishTurn();
+    }
   }
 
   finishTurn();
@@ -1347,34 +1430,42 @@ $("#endAction").onclick = () => {
   if (state && subAction && canControlTurn()) finishTurn();
 };
 
-$("#moveMode").onclick = () => {
-  actionMode = "move";
-  uiMode = null;
-  render();
-};
-
-$("#attackMode").onclick = () => {
-  actionMode = "attack";
-  uiMode = null;
-  render();
-};
-
-$("#forgeMode").onclick = () => {
-  if (!state || !canControlTurn()) return;
-  uiMode = uiMode === "forge" ? null : "forge";
-  forgeIds = [];
-  pendingCraft = null;
-  render();
-};
-
 $("#forgeFocusButton").onclick = () => {
-  if (!state || !canControlTurn()) return;
-  uiMode = "forge";
-  forgeIds = [];
-  pendingCraft = null;
-  render();
+  if (!state) return;
   $(".forge-box").scrollIntoView({behavior: "smooth", block: "center"});
 };
+
+
+function setupForgeDnD() {
+  const box = $("#forgeSlots");
+  if (!box || box.dataset.dndReady) return;
+  box.dataset.dndReady = "1";
+
+  box.addEventListener("dragover", e => {
+    e.preventDefault();
+    box.classList.add("drag-over");
+  });
+  box.addEventListener("dragleave", e => {
+    if (!box.contains(e.relatedTarget)) box.classList.remove("drag-over");
+  });
+  box.addEventListener("drop", e => {
+    e.preventDefault();
+    box.classList.remove("drag-over");
+    const id = e.dataTransfer.getData("application/x-gaejam-piece") || e.dataTransfer.getData("text/plain");
+    addPieceToForge(id);
+  });
+}
+
+function addPieceToForge(id) {
+  if (!state || !canControlTurn()) return;
+  const p = state.pieces.find(x => x.id === id);
+  if (!p || p.controller !== state.turn) return toast("현재 자기 기물만 연성대에 넣을 수 있음.");
+  if (forgeIds.includes(id)) return toast("이미 연성대에 있음.");
+  if (forgeIds.length >= 9) return toast("연성대가 가득 참.");
+  forgeIds.push(id);
+  pendingCraft = null;
+  render();
+}
 
 $("#forgeReset").onclick = () => {
   forgeIds = [];
@@ -1457,8 +1548,18 @@ function render() {
     if (p && isVisibleTo(state, p, viewer)) {
       const chip = document.createElement("span");
       chip.className = `piece ${p.controller} ${p.prince ? "prince" : ""}`;
-      chip.textContent = PIECES[p.type].symbol;
+      chip.innerHTML = pieceArt(p.type);
       chip.title = `${PIECES[p.type].name} HP ${p.hp}`;
+      const draggable = canControlTurn() && p.controller === state.turn;
+      chip.draggable = draggable;
+      if (draggable) {
+        chip.addEventListener("dragstart", e => {
+          e.stopPropagation();
+          e.dataTransfer.effectAllowed = "copy";
+          e.dataTransfer.setData("application/x-gaejam-piece", p.id);
+          e.dataTransfer.setData("text/plain", p.id);
+        });
+      }
       cell.appendChild(chip);
 
       if (p.hp !== maxHp(p, state)) {
@@ -1473,12 +1574,12 @@ function render() {
     if (forgeIds.includes(p?.id)) cell.classList.add("forge-selected");
 
     if (selected && !uiMode && canControlTurn()) {
-      if (actionMode === "move" && canMove(state, selected, r, c, state.turn)) {
-        cell.classList.add("legal-move");
-      }
-      if (actionMode === "attack" && canAttackPoint(state, selected, r, c, state.turn)) {
-        cell.classList.add("legal-attack");
-      }
+      const allowed = allowedActionsFor(selected);
+      const lm = allowed.move && canMove(state, selected, r, c, state.turn);
+      const la = allowed.attack && !isOverwhelmed(state, selected) && canAttackPoint(state, selected, r, c, state.turn);
+      if (lm && la) cell.classList.add("legal-both");
+      else if (lm) cell.classList.add("legal-move");
+      else if (la) cell.classList.add("legal-attack");
     }
 
     if (uiMode === "harbor" && canInstallHarbor(state, state.turn, r, c)) {
@@ -1488,10 +1589,6 @@ function render() {
       cell.classList.add("legal-craft");
     }
   });
-
-  $("#moveMode").classList.toggle("active", actionMode === "move");
-  $("#attackMode").classList.toggle("active", actionMode === "attack");
-  $("#forgeMode").classList.toggle("active", uiMode === "forge");
   $("#endAction").classList.toggle("hidden", !subAction);
 
   const load = state.loadouts[state.turn] || [];
@@ -1562,29 +1659,47 @@ function renderSide(p) {
   }
 }
 
+
 function renderForge() {
   const selectedPieces = forgeIds
     .map(id => state.pieces.find(p => p.id === id))
     .filter(Boolean);
 
-  const names = selectedPieces.map(p => PIECES[p.type].name);
-  $("#forgeItems").textContent = names.length ? names.join(" + ") : "재료 없음";
+  // 죽었거나 보드에서 사라진 재료는 자동 제거
+  forgeIds = selectedPieces.map(p => p.id);
 
-  const rec = recipeFor(
-    selectedPieces.map(p => p.type),
-    state.loadouts[state.turn] || []
-  );
+  const names = selectedPieces.map(p => PIECES[p.type].name);
+  $("#forgeItems").textContent = names.length ? names.join(" + ") : "기물을 보드에서 이곳으로 드래그";
+
+  const rec = recipeFor(selectedPieces.map(p => p.type), state.loadouts[state.turn] || []);
 
   $("#forgeResult").textContent = pendingCraft
     ? `배치 대기: ${PIECES[pendingCraft].name}`
     : rec ? `결과: ${PIECES[rec.result].name}` : "결과: -";
 
-  $("#forgeOutput").textContent = pendingCraft
-    ? PIECES[pendingCraft].symbol
-    : rec ? PIECES[rec.result].symbol : "?";
+  const out = $("#forgeOutput");
+  out.innerHTML = pendingCraft
+    ? pieceArt(pendingCraft)
+    : rec ? pieceArt(rec.result) : "?";
 
-  $$("#forgeSlots > div").forEach((slot, i) => {
-    slot.classList.toggle("filled", i < forgeIds.length);
+  const slots = $$("#forgeSlots > div");
+  slots.forEach((slot, i) => {
+    slot.innerHTML = "";
+    slot.classList.toggle("filled", i < selectedPieces.length);
+    slot.classList.add("drop-ready");
+    const p = selectedPieces[i];
+    if (!p) return;
+    const icon = document.createElement("span");
+    icon.className = `forge-slot-piece ${p.controller}`;
+    icon.innerHTML = pieceArt(p.type);
+    icon.title = `${PIECES[p.type].name} · 클릭하면 연성대에서 제거`;
+    icon.addEventListener("click", e => {
+      e.stopPropagation();
+      forgeIds = forgeIds.filter(id => id !== p.id);
+      pendingCraft = null;
+      render();
+    });
+    slot.appendChild(icon);
   });
 
   $("#forgeCraft").disabled = !rec || !!pendingCraft;
