@@ -8,137 +8,185 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="ambient ambient-a"></div>
-  <div class="ambient ambient-b"></div>
+  <div class="bg-orb orb-a"></div>
+  <div class="bg-orb orb-b"></div>
   <div id="toast"></div>
 
-  <main id="lobby" class="lobby-screen">
-    <header class="lobby-brand">
-      <div class="brand-mark">GJ</div>
-      <div>
-        <h1>개잼체스</h1>
-        <p>ALPHA · ONLINE</p>
-      </div>
-      <div id="networkBadge" class="network-badge">
-        <span class="network-dot"></span>
-        <span id="networkText">서버 연결 중</span>
-      </div>
-    </header>
-
-    <section class="lobby-grid">
-      <article class="glass create-room-card">
-        <div class="glass-icon">＋</div>
-        <div class="eyebrow">NEW MATCH</div>
-        <h2>방 만들기</h2>
-        <p>
-          새 1대1 방을 만든다. 방이 생성되면 5자리 코드가 발급되고
-          방 목록에도 바로 표시된다.
-        </p>
-
-        <button id="createRoom" class="primary-action">
-          새 방 만들기
-        </button>
-
-        <button id="localTest" class="ghost-action">
-          로컬 테스트
-        </button>
-      </article>
-
-      <article class="glass room-list-card">
-        <div class="room-list-head">
-          <div>
-            <div class="eyebrow">ONLINE ROOMS</div>
-            <h2>방 목록</h2>
-          </div>
-          <button id="refreshRooms" class="icon-button" title="새로고침">
-            새로고침
-          </button>
-        </div>
-
-        <div id="roomList" class="room-list">
-          <div class="room-empty">
-            서버에서 방 목록을 불러오는 중…
-          </div>
-        </div>
-
-        <div class="manual-join">
-          <input id="roomCode" maxlength="5" autocomplete="off" placeholder="방 코드 5자리">
-          <button id="joinRoom">코드로 참가</button>
-        </div>
-      </article>
+  <!-- 메인 -->
+  <main id="mainScreen" class="app-screen menu-screen">
+    <section class="menu-card glass">
+      <div class="menu-kicker">GAEJAM CHESS · ALPHA</div>
+      <button id="openRoomList" class="menu-button">방 목록</button>
+      <button id="openCreateRoom" class="menu-button">방 만들기</button>
+      <button id="localTest" class="text-button">로컬 테스트</button>
     </section>
 
-    <footer class="lobby-footer">
-      <span>14×14 WORLD</span>
-      <span>10×10 LAND</span>
-      <span>2-TILE SEA</span>
-    </footer>
+    <div class="brand-corner">
+      <strong>개잼체스</strong>
+      <span id="networkText">서버 연결 중</span>
+    </div>
   </main>
 
-  <section id="loadoutScreen" class="screen hidden">
-    <div class="glass card loadoutbox">
-      <div class="topline">
+  <!-- 방 목록 -->
+  <section id="roomBrowserScreen" class="app-screen hidden center-screen">
+    <div class="browser-window glass">
+      <header class="window-head">
+        <button id="roomListBack" class="back-button">←</button>
         <div>
-          <div class="eyebrow">LOADOUT</div>
-          <h2>사용할 종류 6개 선택</h2>
-          <p id="roomInfo" class="muted"></p>
+          <span class="section-label">ONLINE</span>
+          <h1>방 목록</h1>
         </div>
-        <b id="loadoutCount">0 / 6</b>
-      </div>
+        <button id="refreshRooms" class="small-button">새로고침</button>
+      </header>
 
-      <div id="loadoutChoices" class="loadout-grid"></div>
+      <div class="browser-body">
+        <div id="roomList" class="room-column"></div>
 
-      <div class="topline bottomline">
-        <span id="waiting" class="muted"></span>
-        <button id="readyLoadout" disabled>준비 완료</button>
+        <div id="roomDetails" class="room-detail">
+          <div class="empty-detail">
+            왼쪽에서 방을 선택.
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
-  <section id="gameScreen" class="hidden">
-    <header class="gamebar">
-      <div>
-        <h1>개잼체스</h1>
-        <div id="status"></div>
-      </div>
-      <div class="toolbar">
-        <button id="moveMode">이동</button>
-        <button id="attackMode">공격</button>
-        <button id="endAction" class="hidden">행동 종료</button>
-        <button id="forgeMode">연성대</button>
-        <button id="harborMode">항구 <span id="harborCount">0/3</span></button>
-        <button id="princeMode">왕자 지정</button>
-      </div>
-    </header>
+  <!-- 방 만들기 -->
+  <section id="createRoomScreen" class="app-screen hidden center-screen">
+    <div class="create-window glass">
+      <header class="window-head">
+        <button id="createBack" class="back-button">←</button>
+        <div>
+          <span class="section-label">NEW ROOM</span>
+          <h1>방 만들기</h1>
+        </div>
+      </header>
 
-    <div class="game-layout">
-      <div>
-        <div id="board" aria-label="개잼체스 보드"></div>
-        <div class="legend">
-          <span>현재 구성:</span>
-          <b id="turnLoadout"></b>
+      <div class="create-form">
+        <label>
+          <span>방 이름</span>
+          <input id="createRoomName" maxlength="24" placeholder="개잼체스 방">
+        </label>
+
+        <label>
+          <span>비밀번호</span>
+          <input id="createRoomPassword" maxlength="32" type="password" placeholder="비워두면 공개방">
+        </label>
+
+        <div class="form-actions">
+          <button id="cancelCreate" class="secondary-button">취소</button>
+          <button id="confirmCreate" class="primary-button">만들기</button>
         </div>
       </div>
+    </div>
+  </section>
 
-      <aside>
-        <div id="sidePanel" class="panel glass"></div>
+  <!-- 대기실 -->
+  <section id="waitingRoomScreen" class="app-screen hidden center-screen">
+    <div class="waiting-window glass">
+      <header class="window-head">
+        <button id="leaveRoom" class="back-button">←</button>
+        <div>
+          <span class="section-label">WAITING ROOM</span>
+          <h1 id="waitingRoomName">방</h1>
+          <p id="waitingRoomCode" class="subtext"></p>
+        </div>
+      </header>
 
-        <div id="forgePanel" class="panel glass hidden">
-          <h3>연성대</h3>
-          <p class="muted">연성대 모드에서 자기 기물을 클릭해 재료 선택.</p>
+      <div id="waitingPlayers" class="waiting-players"></div>
+
+      <div class="spectator-box">
+        <span>관전</span>
+        <div>관전자 없음</div>
+      </div>
+
+      <div class="waiting-footer">
+        <span id="waitingHint">상대 입장을 기다리는 중…</span>
+        <button id="readyButton" class="primary-button">준비</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6종 선택 -->
+  <section id="loadoutScreen" class="app-screen hidden center-screen">
+    <div class="loadout-window glass">
+      <header class="loadout-head">
+        <div>
+          <span class="section-label">SELECT</span>
+          <h1>사용할 기물 종류 선택</h1>
+          <p id="roomInfo" class="subtext"></p>
+        </div>
+        <strong id="loadoutCount">0 / 6</strong>
+      </header>
+
+      <div id="loadoutChoices" class="loadout-grid"></div>
+
+      <footer class="loadout-footer">
+        <span id="waiting" class="subtext"></span>
+        <button id="readyLoadout" class="primary-button" disabled>선택 완료</button>
+      </footer>
+    </div>
+  </section>
+
+  <!-- 게임 -->
+  <section id="gameScreen" class="app-screen hidden game-screen">
+    <div class="game-shell">
+      <aside class="left-rail">
+        <section class="forge-box glass">
+          <div class="rail-title">연성대</div>
+          <div class="forge-diagram">
+            <div id="forgeSlots" class="forge-slots">
+              <div></div><div></div><div></div>
+              <div></div><div></div><div></div>
+              <div></div><div></div><div></div>
+            </div>
+            <div class="forge-arrow">↓</div>
+            <div id="forgeOutput" class="forge-output">?</div>
+          </div>
           <div id="forgeItems" class="forge-items">재료 없음</div>
           <div id="forgeResult" class="forge-result">결과: -</div>
-          <div class="row">
-            <button id="forgeCraft">연성하기</button>
-            <button id="forgeReset" class="secondary">초기화</button>
+          <div class="rail-actions">
+            <button id="forgeCraft">연성</button>
+            <button id="forgeReset">초기화</button>
           </div>
-          <p class="muted">현재 알파: 연성 결과 배치 시 1턴 소모.</p>
-        </div>
+        </section>
 
-        <div class="panel glass">
-          <h3>기록</h3>
-          <div id="log"></div>
+        <section id="sidePanel" class="piece-box glass"></section>
+      </aside>
+
+      <main class="board-zone">
+        <div class="board-topbar glass">
+          <div id="status">게임 준비 중</div>
+          <div id="turnLoadout"></div>
         </div>
+        <div id="board" aria-label="개잼체스 보드"></div>
+      </main>
+
+      <aside class="right-rail">
+        <section class="players-box glass">
+          <div class="rail-title">PLAYER</div>
+          <div id="gamePlayers"></div>
+        </section>
+
+        <section class="notation-box glass">
+          <div class="rail-title">기보</div>
+          <div id="log"></div>
+        </section>
+
+        <section class="control-box glass">
+          <div class="control-grid">
+            <button id="moveMode">이동</button>
+            <button id="attackMode">공격</button>
+            <button id="endAction" class="hidden">행동 종료</button>
+            <button id="harborMode">항구 <span id="harborCount">0/3</span></button>
+            <button id="princeMode">왕자 지정</button>
+            <button id="forgeMode">연성 선택</button>
+          </div>
+          <div class="bottom-actions">
+            <button id="resignButton" class="danger-button">기권</button>
+            <button id="forgeFocusButton" class="primary-button">연성대</button>
+          </div>
+        </section>
       </aside>
     </div>
   </section>

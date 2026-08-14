@@ -8,9 +8,7 @@ const PUBLIC = path.join(__dirname, "public");
 const rooms = new Map();
 
 function send(ws, payload) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(payload));
-  }
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
 }
 
 function broadcast(room, payload, except = null) {
@@ -19,12 +17,32 @@ function broadcast(room, payload, except = null) {
   }
 }
 
+function makeCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  do {
+    code = Array.from({length: 5}, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  } while (rooms.has(code));
+  return code;
+}
+
+function cleanName(name) {
+  const value = String(name || "").trim().slice(0, 24);
+  return value || "개잼체스 방";
+}
+
 function roomSnapshot(room) {
   return {
     code: room.code,
-    players: room.players.map(p => ({
+    name: room.name,
+    locked: !!room.password,
+    phase: room.phase,
+    players: room.players.map((p, i) => ({
       color: p.color,
-      ready: !!p.loadout,
+      slot: i + 1,
+      host: i === 0,
+      ready: !!p.ready,
+      loadoutReady: !!p.loadout,
     })),
   };
 }
@@ -34,55 +52,60 @@ function roomList() {
     .sort((a, b) => b.createdAt - a.createdAt)
     .map(room => ({
       code: room.code,
+      name: room.name,
+      locked: !!room.password,
       players: room.players.length,
-      ready: room.players.filter(p => p.loadout).length,
-      status: room.state
-        ? "playing"
-        : room.players.length >= 2
-          ? "full"
-          : "waiting",
+      phase: room.phase,
+      status:
+        room.phase === "playing" ? "playing" :
+        room.phase === "loadout" ? "loadout" :
+        room.players.length >= 2 ? "full" :
+        "waiting",
     }));
 }
 
 function broadcastRoomList() {
-  const payload = { type: "room_list", rooms: roomList() };
+  const payload = {type: "room_list", rooms: roomList()};
   for (const client of wss.clients) send(client, payload);
 }
 
-function makeCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  do {
-    code = Array.from(
-      { length: 5 },
-      () => chars[Math.floor(Math.random() * chars.length)]
-    ).join("");
-  } while (rooms.has(code));
-  return code;
+function resetToWaiting(room) {
+  room.phase = "waiting";
+  room.state = null;
+  for (const p of room.players) {
+    p.ready = false;
+    p.loadout = null;
+  }
 }
 
-function leaveCurrentRoom(ws) {
+function leaveCurrentRoom(ws, notify = true) {
   const code = ws.meta?.room;
   if (!code) return;
 
   const room = rooms.get(code);
   if (!room) {
-    ws.meta = { room: null, color: null };
+    ws.meta = {room: null, color: null};
     return;
   }
 
   room.players = room.players.filter(p => p.ws !== ws);
 
-  if (room.players.length === 0) {
+  if (!room.players.length) {
     rooms.delete(code);
   } else {
-    broadcast(room, {
-      type: "room_snapshot",
-      snapshot: roomSnapshot(room),
-    });
+    // 남은 플레이어가 새 호스트/백이 된다.
+    const survivor = room.players[0];
+    survivor.color = "white";
+    survivor.ready = false;
+    survivor.loadout = null;
+    survivor.ws.meta.color = "white";
+    resetToWaiting(room);
+    send(survivor.ws, {type: "role_update", color: "white"});
+    broadcast(room, {type: "room_snapshot", snapshot: roomSnapshot(room)});
   }
 
-  ws.meta = { room: null, color: null };
+  ws.meta = {room: null, color: null};
+  if (notify) send(ws, {type: "left_room"});
   broadcastRoomList();
 }
 
@@ -109,7 +132,6 @@ const server = http.createServer((req, res) => {
       ".html": "text/html; charset=utf-8",
       ".js": "text/javascript; charset=utf-8",
       ".css": "text/css; charset=utf-8",
-      ".json": "application/json; charset=utf-8",
     };
 
     res.writeHead(200, {
@@ -120,44 +142,48 @@ const server = http.createServer((req, res) => {
   });
 });
 
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({server});
 
 wss.on("connection", ws => {
-  ws.meta = { room: null, color: null };
-
-  send(ws, { type: "room_list", rooms: roomList() });
+  ws.meta = {room: null, color: null};
+  send(ws, {type: "room_list", rooms: roomList()});
 
   ws.on("message", raw => {
     let msg;
     try {
       msg = JSON.parse(raw.toString());
     } catch {
-      return send(ws, { type: "error", message: "잘못된 요청." });
+      return send(ws, {type: "error", message: "잘못된 요청."});
     }
 
     if (msg.type === "list_rooms") {
-      return send(ws, { type: "room_list", rooms: roomList() });
+      return send(ws, {type: "room_list", rooms: roomList()});
     }
 
     if (msg.type === "create_room") {
-      leaveCurrentRoom(ws);
+      leaveCurrentRoom(ws, false);
 
       const code = makeCode();
       const room = {
         code,
+        name: cleanName(msg.name),
+        password: String(msg.password || "").slice(0, 32),
         players: [],
+        phase: "waiting",
         state: null,
         createdAt: Date.now(),
       };
 
       rooms.set(code, room);
+
       room.players.push({
         ws,
         color: "white",
+        ready: false,
         loadout: null,
       });
 
-      ws.meta = { room: code, color: "white" };
+      ws.meta = {room: code, color: "white"};
 
       send(ws, {
         type: "room_joined",
@@ -174,36 +200,23 @@ wss.on("connection", ws => {
       const code = String(msg.room || "").trim().toUpperCase();
       const room = rooms.get(code);
 
-      if (!room) {
-        return send(ws, {
-          type: "error",
-          message: "방을 찾을 수 없음.",
-        });
+      if (!room) return send(ws, {type: "error", message: "방을 찾을 수 없음."});
+      if (room.phase !== "waiting") return send(ws, {type: "error", message: "지금은 참가할 수 없는 방임."});
+      if (room.players.length >= 2) return send(ws, {type: "error", message: "방이 가득 참."});
+      if (room.password && String(msg.password || "") !== room.password) {
+        return send(ws, {type: "error", message: "비밀번호가 틀림."});
       }
 
-      if (room.state) {
-        return send(ws, {
-          type: "error",
-          message: "이미 게임이 시작된 방임.",
-        });
-      }
-
-      if (room.players.length >= 2) {
-        return send(ws, {
-          type: "error",
-          message: "이미 2명이 들어와 있음.",
-        });
-      }
-
-      leaveCurrentRoom(ws);
+      leaveCurrentRoom(ws, false);
 
       room.players.push({
         ws,
         color: "black",
+        ready: false,
         loadout: null,
       });
 
-      ws.meta = { room: code, color: "black" };
+      ws.meta = {room: code, color: "black"};
 
       send(ws, {
         type: "room_joined",
@@ -212,62 +225,64 @@ wss.on("connection", ws => {
         snapshot: roomSnapshot(room),
       });
 
-      broadcast(room, {
-        type: "room_snapshot",
-        snapshot: roomSnapshot(room),
-      });
+      broadcast(room, {type: "room_snapshot", snapshot: roomSnapshot(room)});
+      broadcastRoomList();
+      return;
+    }
+
+    if (msg.type === "leave_room") {
+      leaveCurrentRoom(ws, true);
+      return;
+    }
+
+    const room = rooms.get(ws.meta.room);
+    if (!room) return send(ws, {type: "error", message: "현재 방에 들어가 있지 않음."});
+
+    const me = room.players.find(p => p.ws === ws);
+    if (!me) return;
+
+    if (msg.type === "toggle_ready") {
+      if (room.phase !== "waiting") return;
+      me.ready = !me.ready;
+
+      broadcast(room, {type: "room_snapshot", snapshot: roomSnapshot(room)});
+
+      if (room.players.length === 2 && room.players.every(p => p.ready)) {
+        room.phase = "loadout";
+        for (const p of room.players) p.loadout = null;
+
+        broadcast(room, {
+          type: "phase_loadout",
+          snapshot: roomSnapshot(room),
+        });
+      }
 
       broadcastRoomList();
       return;
     }
 
-    const room = rooms.get(ws.meta.room);
-    if (!room) {
-      return send(ws, {
-        type: "error",
-        message: "현재 들어가 있는 방이 없음.",
-      });
-    }
-
-    const me = room.players.find(p => p.ws === ws);
-    if (!me) return;
-
     if (msg.type === "loadout") {
+      if (room.phase !== "loadout") {
+        return send(ws, {type: "error", message: "아직 기물 선택 단계가 아님."});
+      }
+
       if (!Array.isArray(msg.items) || msg.items.length !== 6) {
-        return send(ws, {
-          type: "error",
-          message: "정확히 6종을 골라야 함.",
-        });
+        return send(ws, {type: "error", message: "정확히 6종을 골라야 함."});
       }
 
       me.loadout = [...new Set(msg.items)];
-
       if (me.loadout.length !== 6) {
-        return send(ws, {
-          type: "error",
-          message: "중복 선택 불가.",
-        });
+        return send(ws, {type: "error", message: "중복 선택 불가."});
       }
 
-      broadcast(room, {
-        type: "room_snapshot",
-        snapshot: roomSnapshot(room),
-      });
+      broadcast(room, {type: "room_snapshot", snapshot: roomSnapshot(room)});
 
-      if (
-        room.players.length === 2 &&
-        room.players.every(p => p.loadout)
-      ) {
-        const loadouts = Object.fromEntries(
-          room.players.map(p => [p.color, p.loadout])
-        );
-
+      if (room.players.every(p => p.loadout)) {
+        const loadouts = Object.fromEntries(room.players.map(p => [p.color, p.loadout]));
+        room.phase = "playing";
         room.state = null;
 
-        broadcast(room, {
-          type: "start_game",
-          loadouts,
-        });
+        broadcast(room, {type: "start_game", loadouts});
       }
 
       broadcastRoomList();
@@ -276,29 +291,19 @@ wss.on("connection", ws => {
 
     if (msg.type === "state") {
       room.state = msg.state;
-      broadcast(room, {
-        type: "state",
-        state: msg.state,
-      }, ws);
+      room.phase = "playing";
+      broadcast(room, {type: "state", state: msg.state}, ws);
       broadcastRoomList();
       return;
     }
 
     if (msg.type === "request_state" && room.state) {
-      return send(ws, {
-        type: "state",
-        state: room.state,
-      });
+      return send(ws, {type: "state", state: room.state});
     }
   });
 
-  ws.on("close", () => {
-    leaveCurrentRoom(ws);
-  });
-
-  ws.on("error", err => {
-    console.error("WebSocket error:", err.message);
-  });
+  ws.on("close", () => leaveCurrentRoom(ws, false));
+  ws.on("error", err => console.error("WebSocket error:", err.message));
 });
 
 server.listen(PORT, "0.0.0.0", () => {

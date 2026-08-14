@@ -754,9 +754,17 @@ function normalizeHpAfterStateEffects(state) {
 
 // ===== UI / 온라인 =====
 const $ = s => document.querySelector(s);
-const lobby = $("#lobby");
-const loadoutScreen = $("#loadoutScreen");
-const gameScreen = $("#gameScreen");
+const $$ = s => [...document.querySelectorAll(s)];
+
+const screens = {
+  main: $("#mainScreen"),
+  browser: $("#roomBrowserScreen"),
+  create: $("#createRoomScreen"),
+  waiting: $("#waitingRoomScreen"),
+  loadout: $("#loadoutScreen"),
+  game: $("#gameScreen"),
+};
+
 const boardEl = $("#board");
 const statusEl = $("#status");
 const sideEl = $("#sidePanel");
@@ -764,77 +772,134 @@ const logEl = $("#log");
 const toastEl = $("#toast");
 
 let socket = null;
+let socketPromise = null;
+let roomDirectory = [];
+let selectedRoomCode = null;
+let currentRoomSnapshot = null;
 let roomCode = null;
 let myColor = null;
 let localMode = false;
 let state = null;
+
 let chosenLoadout = new Set();
 let selectedId = null;
 let actionMode = "move";
-let subAction = null; // {pieceId, moved, attacked}
-let uiMode = null; // forge | harbor | prince | hypnosis | commandLast | commandInd
+let subAction = null;
+let uiMode = null;
 let forgeIds = [];
 let pendingCraft = null;
 
 function toast(msg) {
   toastEl.textContent = msg;
   toastEl.classList.add("show");
-  setTimeout(()=>toastEl.classList.remove("show"),1800);
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => toastEl.classList.remove("show"), 1800);
 }
 
-
-let roomDirectory = [];
-let socketPromise = null;
-
-function setNetworkState(kind, text) {
-  const badge = $("#networkBadge");
-  const label = $("#networkText");
-  if (!badge || !label) return;
-  badge.classList.remove("online", "offline");
-  if (kind) badge.classList.add(kind);
-  label.textContent = text;
+function showScreen(name) {
+  Object.values(screens).forEach(el => el.classList.add("hidden"));
+  screens[name].classList.remove("hidden");
 }
 
-function bindSocketEvents(ws) {
-  ws.onmessage = e => {
+function setNetworkText(text) {
+  $("#networkText").textContent = text;
+}
+
+function ensureSocket() {
+  if (socket && socket.readyState === WebSocket.OPEN) return Promise.resolve(socket);
+  if (socketPromise) return socketPromise;
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  socket = new WebSocket(`${proto}://${location.host}`);
+  bindSocket(socket);
+  setNetworkText("서버 연결 중");
+
+  socketPromise = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), 8000);
+
+    socket.addEventListener("open", () => {
+      clearTimeout(timer);
+      socketPromise = null;
+      setNetworkText("온라인");
+      socket.send(JSON.stringify({type: "list_rooms"}));
+      resolve(socket);
+    }, {once: true});
+
+    socket.addEventListener("error", () => {
+      clearTimeout(timer);
+      socketPromise = null;
+      setNetworkText("연결 실패");
+      reject(new Error("socket error"));
+    }, {once: true});
+  });
+
+  return socketPromise;
+}
+
+async function sendMessage(payload) {
+  try {
+    const ws = await ensureSocket();
+    ws.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    toast("서버 연결 실패.");
+    return false;
+  }
+}
+
+function bindSocket(ws) {
+  ws.addEventListener("message", e => {
     let msg;
-    try {
-      msg = JSON.parse(e.data);
-    } catch {
-      return toast("서버 응답 해석 실패.");
-    }
+    try { msg = JSON.parse(e.data); }
+    catch { return; }
 
     if (msg.type === "error") {
-      const createBtn = $("#createRoom");
-      if (createBtn) {
-        createBtn.disabled = false;
-        createBtn.textContent = "새 방 만들기";
-      }
       toast(msg.message);
       return;
     }
 
     if (msg.type === "room_list") {
       roomDirectory = Array.isArray(msg.rooms) ? msg.rooms : [];
-      renderRoomDirectory();
+      if (selectedRoomCode && !roomDirectory.some(r => r.code === selectedRoomCode)) {
+        selectedRoomCode = null;
+      }
+      renderRoomBrowser();
       return;
     }
 
     if (msg.type === "room_joined") {
       myColor = msg.color;
       roomCode = msg.room;
+      currentRoomSnapshot = msg.snapshot;
+      renderWaitingRoom();
+      showScreen("waiting");
+      return;
+    }
 
-      $("#roomInfo").textContent =
-        `방 ${roomCode} / ${myColor === "white" ? "백" : "흑"}`;
+    if (msg.type === "left_room") {
+      roomCode = null;
+      myColor = null;
+      currentRoomSnapshot = null;
+      selectedRoomCode = null;
+      showScreen("main");
+      return;
+    }
 
-      lobby.classList.add("hidden");
-      showLoadout();
-      updateRoomSnapshot(msg.snapshot);
+    if (msg.type === "role_update") {
+      myColor = msg.color;
       return;
     }
 
     if (msg.type === "room_snapshot") {
-      updateRoomSnapshot(msg.snapshot);
+      currentRoomSnapshot = msg.snapshot;
+      if (!screens.waiting.classList.contains("hidden")) renderWaitingRoom();
+      if (!screens.loadout.classList.contains("hidden")) updateLoadoutWaiting();
+      return;
+    }
+
+    if (msg.type === "phase_loadout") {
+      currentRoomSnapshot = msg.snapshot;
+      showLoadout(false);
       return;
     }
 
@@ -850,486 +915,697 @@ function bindSocketEvents(ws) {
       clearTransient();
       render();
     }
-  };
-
-  ws.onclose = () => {
-    setNetworkState("offline", "연결 끊김");
-    socketPromise = null;
-    if (socket === ws) socket = null;
-  };
-
-  ws.onerror = () => {
-    setNetworkState("offline", "연결 오류");
-  };
-}
-
-function ensureSocket() {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    return Promise.resolve(socket);
-  }
-
-  if (socketPromise) return socketPromise;
-
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const url = `${proto}://${location.host}`;
-
-  setNetworkState("", "서버 연결 중");
-  socket = new WebSocket(url);
-  bindSocketEvents(socket);
-
-  socketPromise = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error("서버 연결 시간 초과"));
-      try { socket.close(); } catch {}
-    }, 8000);
-
-    socket.addEventListener("open", () => {
-      clearTimeout(timer);
-      setNetworkState("online", "온라인");
-      const ready = socket;
-      socketPromise = null;
-      ready.send(JSON.stringify({ type: "list_rooms" }));
-      resolve(ready);
-    }, { once: true });
-
-    socket.addEventListener("error", () => {
-      clearTimeout(timer);
-      socketPromise = null;
-      reject(new Error("WebSocket 연결 실패"));
-    }, { once: true });
   });
 
-  return socketPromise;
+  ws.addEventListener("close", () => {
+    socket = null;
+    socketPromise = null;
+    setNetworkText("연결 끊김");
+  });
 }
 
-async function sendLobbyMessage(payload) {
-  try {
-    const ws = await ensureSocket();
-    ws.send(JSON.stringify(payload));
-    return true;
-  } catch (err) {
-    console.error(err);
-    toast("서버 연결 실패. Render 서비스 상태를 확인.");
-    return false;
-  }
+// ---------- 메인 / 방 목록 ----------
+$("#openRoomList").onclick = async () => {
+  showScreen("browser");
+  await sendMessage({type: "list_rooms"});
+  renderRoomBrowser();
+};
+
+$("#openCreateRoom").onclick = () => {
+  $("#createRoomName").value = "";
+  $("#createRoomPassword").value = "";
+  showScreen("create");
+  $("#createRoomName").focus();
+};
+
+$("#roomListBack").onclick = () => showScreen("main");
+$("#createBack").onclick = () => showScreen("main");
+$("#cancelCreate").onclick = () => showScreen("main");
+
+$("#refreshRooms").onclick = () => sendMessage({type: "list_rooms"});
+
+$("#confirmCreate").onclick = async () => {
+  const name = $("#createRoomName").value.trim() || "개잼체스 방";
+  const password = $("#createRoomPassword").value;
+
+  $("#confirmCreate").disabled = true;
+  const ok = await sendMessage({type: "create_room", name, password});
+  $("#confirmCreate").disabled = false;
+  if (!ok) return;
+};
+
+$("#createRoomName").addEventListener("keydown", e => {
+  if (e.key === "Enter") $("#confirmCreate").click();
+});
+$("#createRoomPassword").addEventListener("keydown", e => {
+  if (e.key === "Enter") $("#confirmCreate").click();
+});
+
+function roomStatusLabel(room) {
+  if (room.status === "playing") return "게임 중";
+  if (room.status === "loadout") return "선택 중";
+  if (room.status === "full") return "가득 참";
+  return "입장 가능";
 }
 
-function renderRoomDirectory() {
+function renderRoomBrowser() {
   const list = $("#roomList");
-  if (!list) return;
-
-  if (!roomDirectory.length) {
-    list.innerHTML = `
-      <div class="room-empty">
-        현재 열린 방이 없음.<br>
-        왼쪽에서 새 방을 만들면 된다.
-      </div>
-    `;
-    return;
-  }
+  const details = $("#roomDetails");
+  if (!list || !details) return;
 
   list.innerHTML = "";
 
+  if (!roomDirectory.length) {
+    list.innerHTML = `<div class="empty-detail">열린 방이 없음.</div>`;
+    details.innerHTML = `<div class="empty-detail">방을 만들거나 새로고침.</div>`;
+    return;
+  }
+
+  if (!selectedRoomCode) selectedRoomCode = roomDirectory[0].code;
+
   for (const room of roomDirectory) {
-    const item = document.createElement("div");
-    item.className = "room-item";
-
-    const info = document.createElement("div");
-    info.innerHTML = `
-      <div class="room-code">${escapeHtml(room.code)}</div>
-      <div class="room-meta">
-        플레이어 ${room.players}/2 · 준비 ${room.ready}/2
-      </div>
+    const btn = document.createElement("button");
+    btn.className = "room-list-item" + (room.code === selectedRoomCode ? " selected" : "");
+    btn.innerHTML = `
+      <span class="room-name">${room.locked ? "⌁ " : ""}${escapeHtml(room.name)}</span>
+      <span class="room-small">${room.players}/2 · ${roomStatusLabel(room)}</span>
     `;
-
-    const status = document.createElement("div");
-    status.className = "room-status";
-    status.textContent =
-      room.status === "waiting" ? "대기 중" :
-      room.status === "full" ? "가득 참" :
-      "게임 중";
-
-    const join = document.createElement("button");
-    join.textContent = "참가";
-    join.disabled = room.status !== "waiting";
-    join.onclick = async () => {
-      join.disabled = true;
-      const ok = await sendLobbyMessage({
-        type: "join_room",
-        room: room.code,
-      });
-      if (!ok) join.disabled = false;
+    btn.onclick = () => {
+      selectedRoomCode = room.code;
+      renderRoomBrowser();
     };
+    list.appendChild(btn);
+  }
 
-    item.append(info, status, join);
-    list.appendChild(item);
+  const room = roomDirectory.find(r => r.code === selectedRoomCode) || roomDirectory[0];
+  if (!room) return;
+
+  const canJoin = room.status === "waiting" && room.players < 2;
+  details.innerHTML = `
+    <div class="detail-title-row">
+      <div>
+        <span class="section-label">ROOM</span>
+        <h2>${escapeHtml(room.name)}</h2>
+      </div>
+      <span class="player-count">${room.players}/2</span>
+    </div>
+
+    <div class="detail-lines">
+      <div>코드: <strong>${escapeHtml(room.code)}</strong></div>
+      <div>상태: ${roomStatusLabel(room)}</div>
+      <div>${room.locked ? "비밀번호가 필요한 방" : "공개방"}</div>
+    </div>
+
+    <div class="detail-password">
+      ${room.locked ? `
+        <label for="joinPassword">비밀번호</label>
+        <input id="joinPassword" type="password" placeholder="비밀번호 입력">
+      ` : ""}
+      <button id="joinSelectedRoom" class="join-selected primary-button" ${canJoin ? "" : "disabled"}>
+        ${canJoin ? "입장" : "입장 불가"}
+      </button>
+    </div>
+  `;
+
+  $("#joinSelectedRoom").onclick = async () => {
+    const password = room.locked ? ($("#joinPassword")?.value || "") : "";
+    await sendMessage({type: "join_room", room: room.code, password});
+  };
+
+  if (room.locked) {
+    $("#joinPassword").addEventListener("keydown", e => {
+      if (e.key === "Enter") $("#joinSelectedRoom").click();
+    });
   }
 }
 
-$("#createRoom").onclick = async () => {
-  const btn = $("#createRoom");
-  btn.disabled = true;
-  btn.textContent = "방 만드는 중…";
+// ---------- 대기실 ----------
+$("#leaveRoom").onclick = () => sendMessage({type: "leave_room"});
+$("#readyButton").onclick = () => sendMessage({type: "toggle_ready"});
 
-  const ok = await sendLobbyMessage({ type: "create_room" });
+function renderWaitingRoom() {
+  const s = currentRoomSnapshot;
+  if (!s) return;
 
-  if (!ok) {
-    btn.disabled = false;
-    btn.textContent = "새 방 만들기";
+  $("#waitingRoomName").textContent = s.name;
+  $("#waitingRoomCode").textContent = `방 코드 ${s.code}${s.locked ? " · 비밀번호방" : ""}`;
+
+  const box = $("#waitingPlayers");
+  box.innerHTML = "";
+
+  for (let slot = 1; slot <= 2; slot++) {
+    const p = s.players.find(x => x.slot === slot);
+    const row = document.createElement("div");
+    row.className = "waiting-player" + (p ? "" : " empty");
+
+    row.innerHTML = p ? `
+      <div>
+        <div class="player-title">Player ${slot}</div>
+        <div class="player-sub">${p.host ? "HOST · " : ""}${p.color === "white" ? "백" : "흑"}${p.color === myColor ? " · YOU" : ""}</div>
+      </div>
+      <div class="ready-state ${p.ready ? "ready" : ""}">
+        ${p.ready ? "준비됨" : "대기 중"}
+      </div>
+    ` : `
+      <div>
+        <div class="player-title">Player ${slot}</div>
+        <div class="player-sub">EMPTY</div>
+      </div>
+      <div class="ready-state">비어 있음</div>
+    `;
+    box.appendChild(row);
   }
-};
 
-$("#joinRoom").onclick = async () => {
-  const room = $("#roomCode").value.trim().toUpperCase();
-  if (!room) return toast("방 코드를 입력.");
+  const me = s.players.find(p => p.color === myColor);
+  $("#readyButton").textContent = me?.ready ? "준비 취소" : "준비";
+  $("#readyButton").disabled = s.players.length < 2;
+  $("#waitingHint").textContent =
+    s.players.length < 2 ? "상대 입장을 기다리는 중…" :
+    s.players.every(p => p.ready) ? "기물 선택으로 이동 중…" :
+    "두 플레이어가 준비하면 기물 선택 시작.";
+}
 
-  await sendLobbyMessage({
-    type: "join_room",
-    room,
-  });
-};
-
-$("#roomCode").addEventListener("keydown", e => {
-  if (e.key === "Enter") $("#joinRoom").click();
-});
-
-$("#refreshRooms").onclick = async () => {
-  await sendLobbyMessage({ type: "list_rooms" });
-};
-
-$("#localTest").onclick = () => {
-  localMode = true;
-  myColor = "both";
-  roomCode = "LOCAL";
-  lobby.classList.add("hidden");
-  showLoadout(true);
-};
-
-// 첫 화면에서 바로 서버 접속 + 방 목록 요청
-ensureSocket().catch(() => {
-  renderRoomDirectory();
-});
-
-function showLoadout(local=false) {
-  loadoutScreen.classList.remove("hidden");
-  const box=$("#loadoutChoices");
-  box.innerHTML="";
+// ---------- 기물 선택 ----------
+function showLoadout(local = false) {
+  showScreen("loadout");
+  const box = $("#loadoutChoices");
+  box.innerHTML = "";
   chosenLoadout.clear();
-  for (const [id,label] of LOADOUTS) {
-    const b=document.createElement("button");
-    b.className="loadout-card";
-    b.dataset.id=id;
-    b.innerHTML=`<strong>${label}</strong>${id==="necromancer"?"<small>능력/조합 미정</small>":""}`;
-    b.onclick=()=>{
-      if(chosenLoadout.has(id)) chosenLoadout.delete(id);
-      else if(chosenLoadout.size<6) chosenLoadout.add(id);
-      else return toast("6개까지만.");
+
+  $("#roomInfo").textContent = local
+    ? "로컬 테스트"
+    : `${currentRoomSnapshot?.name || "방"} · ${roomCode}`;
+
+  for (const [id, label] of LOADOUTS) {
+    const b = document.createElement("button");
+    b.className = "loadout-card";
+    b.dataset.id = id;
+    b.innerHTML = `<strong>${label}</strong>${id === "necromancer" ? "<small>세부 구현 예정</small>" : ""}`;
+
+    b.onclick = () => {
+      if (chosenLoadout.has(id)) chosenLoadout.delete(id);
+      else if (chosenLoadout.size < 6) chosenLoadout.add(id);
+      else return toast("6개까지만 선택 가능.");
       refreshLoadout();
     };
+
     box.appendChild(b);
   }
-  $("#readyLoadout").textContent=local ? "이 구성으로 로컬 시작" : "준비 완료";
+
+  $("#readyLoadout").textContent = local ? "이 구성으로 시작" : "선택 완료";
+  $("#readyLoadout").disabled = true;
+  $("#waiting").textContent = "";
   refreshLoadout();
 }
 
 function refreshLoadout() {
-  document.querySelectorAll(".loadout-card").forEach(b=>b.classList.toggle("selected",chosenLoadout.has(b.dataset.id)));
-  $("#loadoutCount").textContent=`${chosenLoadout.size} / 6`;
-  $("#readyLoadout").disabled=chosenLoadout.size!==6;
+  $$(".loadout-card").forEach(b => b.classList.toggle("selected", chosenLoadout.has(b.dataset.id)));
+  $("#loadoutCount").textContent = `${chosenLoadout.size} / 6`;
+  $("#readyLoadout").disabled = chosenLoadout.size !== 6;
 }
 
-$("#readyLoadout").onclick=()=>{
-  const items=[...chosenLoadout];
-  if(localMode) {
-    state=createInitialState({white:items,black:items});
+$("#readyLoadout").onclick = () => {
+  const items = [...chosenLoadout];
+
+  if (localMode) {
+    state = createInitialState({white: items, black: items});
     startGame();
-  } else {
-    socket.send(JSON.stringify({type:"loadout",items}));
-    $("#readyLoadout").disabled=true;
-    $("#waiting").textContent="상대 준비 대기 중…";
+    return;
   }
+
+  socket.send(JSON.stringify({type: "loadout", items}));
+  $("#readyLoadout").disabled = true;
+  $("#waiting").textContent = "상대 선택 완료 대기 중…";
 };
 
-function updateRoomSnapshot(s) {
-  if(!s) return;
-  $("#waiting").textContent=`접속 ${s.players.length}/2 · 준비 ${s.players.filter(p=>p.ready).length}/2`;
+function updateLoadoutWaiting() {
+  const s = currentRoomSnapshot;
+  if (!s) return;
+  const ready = s.players.filter(p => p.loadoutReady).length;
+  $("#waiting").textContent = `선택 완료 ${ready}/2`;
 }
 
+// ---------- 로컬 ----------
+$("#localTest").onclick = () => {
+  localMode = true;
+  myColor = "both";
+  roomCode = "LOCAL";
+  showLoadout(true);
+};
+
+// ---------- 게임 ----------
 function startGame() {
-  loadoutScreen.classList.add("hidden");
-  gameScreen.classList.remove("hidden");
+  showScreen("game");
   buildBoard();
   render();
 }
 
 function buildBoard() {
-  boardEl.innerHTML="";
-  for(let r=0;r<SIZE;r++) for(let c=0;c<SIZE;c++) {
-    const cell=document.createElement("button");
-    cell.className="cell";
-    cell.dataset.r=r;cell.dataset.c=c;
-    cell.onclick=()=>cellClick(r,c);
-    boardEl.appendChild(cell);
+  boardEl.innerHTML = "";
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      const cell = document.createElement("button");
+      cell.className = "cell";
+      cell.dataset.r = r;
+      cell.dataset.c = c;
+      cell.onclick = () => cellClick(r, c);
+      boardEl.appendChild(cell);
+    }
   }
 }
 
 function canControlTurn() {
-  return localMode || myColor===state.turn;
+  return localMode || myColor === state.turn;
 }
 
 function clearTransient() {
-  selectedId=null;actionMode="move";subAction=null;uiMode=null;forgeIds=[];pendingCraft=null;
+  selectedId = null;
+  actionMode = "move";
+  subAction = null;
+  uiMode = null;
+  forgeIds = [];
+  pendingCraft = null;
 }
 
 function sendState() {
-  if(!localMode && socket?.readyState===1) socket.send(JSON.stringify({type:"state",state}));
+  if (!localMode && socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({type: "state", state}));
+  }
 }
 
 function finishTurn() {
-  subAction=null;selectedId=null;uiMode=null;forgeIds=[];pendingCraft=null;
+  subAction = null;
+  selectedId = null;
+  uiMode = null;
+  forgeIds = [];
+  pendingCraft = null;
   endTurn(state);
   sendState();
   render();
 }
 
 function currentPiece() {
-  return state?.pieces.find(p=>p.id===selectedId) || null;
+  return state?.pieces.find(p => p.id === selectedId) || null;
 }
 
-function cellClick(r,c) {
-  if(!state || state.winner || !canControlTurn()) return;
+function cellClick(r, c) {
+  if (!state || state.winner || !canControlTurn()) return;
 
-  if(pendingCraft) {
-    if(canPlaceCraft(state,state.turn,pendingCraft,r,c)) {
-      const res=placeCraft(state,state.turn,pendingCraft,r,c);
-      if(res.ok) {
-        consumePieces(state,forgeIds);
+  if (pendingCraft) {
+    if (canPlaceCraft(state, state.turn, pendingCraft, r, c)) {
+      const res = placeCraft(state, state.turn, pendingCraft, r, c);
+      if (res.ok) {
+        consumePieces(state, forgeIds);
         finishTurn();
       }
     } else toast("여기에는 배치 못 함.");
     return;
   }
 
-  if(uiMode==="harbor") {
-    const res=installHarbor(state,state.turn,r,c);
-    if(res.ok) finishTurn(); else toast(res.msg);
+  if (uiMode === "harbor") {
+    const res = installHarbor(state, state.turn, r, c);
+    if (res.ok) finishTurn();
+    else toast(res.msg);
     return;
   }
 
-  const clicked=at(state,r,c);
+  const clicked = at(state, r, c);
 
-  if(uiMode==="forge") {
-    if(clicked && clicked.controller===state.turn) {
-      if(forgeIds.includes(clicked.id)) forgeIds=forgeIds.filter(x=>x!==clicked.id);
-      else forgeIds.push(clicked.id);
+  if (uiMode === "forge") {
+    if (clicked && clicked.controller === state.turn) {
+      if (forgeIds.includes(clicked.id)) forgeIds = forgeIds.filter(x => x !== clicked.id);
+      else if (forgeIds.length < 9) forgeIds.push(clicked.id);
       render();
     }
     return;
   }
 
-  if(uiMode==="prince") {
-    const res=appointPrince(state,clicked);
-    if(res.ok) finishTurn(); else toast(res.msg);
+  if (uiMode === "prince") {
+    const res = appointPrince(state, clicked);
+    if (res.ok) finishTurn();
+    else toast(res.msg);
     return;
   }
 
-  if(uiMode==="hypnosis") {
-    const caster=currentPiece();
-    const res=applyHypnosis(state,caster,clicked);
-    if(res.ok) finishTurn(); else toast(res.msg);
+  if (uiMode === "hypnosis") {
+    const caster = currentPiece();
+    const res = applyHypnosis(state, caster, clicked);
+    if (res.ok) finishTurn();
+    else toast(res.msg);
     return;
   }
 
-  if(uiMode==="commandLast" || uiMode==="commandInd") {
-    const cmd=currentPiece();
-    const res=applyCommand(state,cmd,clicked,uiMode==="commandLast"?"lastStand":"indiscriminate");
-    if(res.ok) { uiMode=null; render(); sendState(); } else toast(res.msg);
-    return; // 지휘는 턴 소모 X
+  if (uiMode === "commandLast" || uiMode === "commandInd") {
+    const cmd = currentPiece();
+    const res = applyCommand(
+      state,
+      cmd,
+      clicked,
+      uiMode === "commandLast" ? "lastStand" : "indiscriminate"
+    );
+    if (res.ok) {
+      uiMode = null;
+      render();
+      sendState();
+    } else toast(res.msg);
+    return;
   }
 
-  const sel=currentPiece();
-  if(!sel) {
-    if(clicked && canAct(state,clicked,state.turn)) {
-      selectedId=clicked.id;actionMode="move";subAction=null;render();
+  const sel = currentPiece();
+
+  if (!sel) {
+    if (clicked && canAct(state, clicked, state.turn)) {
+      selectedId = clicked.id;
+      actionMode = "move";
+      subAction = null;
+      render();
     }
     return;
   }
 
-  if(clicked && clicked.id===sel.id) {
+  if (clicked && clicked.id === sel.id) {
     if (subAction) return;
-    selectedId=null;render();return;
+    selectedId = null;
+    render();
+    return;
   }
 
-  // 다른 자기 통제 기물 선택
-  if(clicked && canAct(state,clicked,state.turn) && !subAction) {
-    selectedId=clicked.id;actionMode="move";render();return;
+  if (clicked && canAct(state, clicked, state.turn) && !subAction) {
+    selectedId = clicked.id;
+    actionMode = "move";
+    render();
+    return;
   }
 
-  if(isOverwhelmed(state,sel) && actionMode==="attack") return toast("압도: 공격 불가.");
+  if (isOverwhelmed(state, sel) && actionMode === "attack") {
+    return toast("압도: 공격 불가.");
+  }
 
-  if(actionMode==="move") {
-    const res=movePiece(state,sel,r,c,state.turn);
-    if(!res.ok) return toast(res.msg);
-    handleActionContinuation(sel,"move");
+  if (actionMode === "move") {
+    const res = movePiece(state, sel, r, c, state.turn);
+    if (!res.ok) return toast(res.msg);
+    handleActionContinuation(sel, "move");
   } else {
-    const res=attackPoint(state,sel,r,c,state.turn);
-    if(!res.ok) return toast(res.msg);
-    handleActionContinuation(sel,"attack");
+    const res = attackPoint(state, sel, r, c, state.turn);
+    if (!res.ok) return toast(res.msg);
+    handleActionContinuation(sel, "attack");
   }
 }
 
-function handleActionContinuation(piece,kind) {
-  const still=state.pieces.find(p=>p.id===piece.id);
-  if(!still) return finishTurn();
-  const traits=effectiveTraits(state,still);
+function handleActionContinuation(piece, kind) {
+  const still = state.pieces.find(p => p.id === piece.id);
+  if (!still) return finishTurn();
 
-  if(traits.includes("breakthrough")) {
-    subAction = subAction || {pieceId:still.id,moved:false,attacked:false};
-    if(kind==="move") subAction.moved=true;
-    if(kind==="attack") subAction.attacked=true;
-    if(subAction.moved && subAction.attacked) return finishTurn();
+  const traits = effectiveTraits(state, still);
+
+  if (traits.includes("breakthrough")) {
+    subAction = subAction || {pieceId: still.id, moved: false, attacked: false};
+    if (kind === "move") subAction.moved = true;
+    if (kind === "attack") subAction.attacked = true;
+    if (subAction.moved && subAction.attacked) return finishTurn();
+
     actionMode = subAction.moved ? "attack" : "move";
-    selectedId=still.id;render();sendState();return;
+    selectedId = still.id;
+    render();
+    sendState();
+    return;
   }
 
-  if(traits.includes("mobility") && kind==="move") {
-    subAction={pieceId:still.id,moved:true,attacked:false};
-    actionMode="move";
-    selectedId=still.id;
-    render();sendState();return;
+  if (traits.includes("mobility") && kind === "move") {
+    subAction = {pieceId: still.id, moved: true, attacked: false};
+    actionMode = "move";
+    selectedId = still.id;
+    render();
+    sendState();
+    return;
   }
 
   finishTurn();
 }
 
-$("#endAction").onclick=()=>{ if(state && subAction && canControlTurn()) finishTurn(); };
-$("#moveMode").onclick=()=>{actionMode="move";uiMode=null;render();};
-$("#attackMode").onclick=()=>{actionMode="attack";uiMode=null;render();};
-
-$("#forgeMode").onclick=()=>{
-  if(!state||!canControlTurn())return;
-  uiMode=uiMode==="forge"?null:"forge";forgeIds=[];pendingCraft=null;render();
+$("#endAction").onclick = () => {
+  if (state && subAction && canControlTurn()) finishTurn();
 };
-$("#forgeReset").onclick=()=>{forgeIds=[];pendingCraft=null;render();};
-$("#forgeCraft").onclick=()=>{
-  if(!state||!forgeIds.length)return;
-  const pieces=forgeIds.map(id=>state.pieces.find(p=>p.id===id)).filter(Boolean);
-  if(pieces.some(p=>p.controller!==state.turn)) return toast("자기 기물만 재료 가능.");
-  const rec=recipeFor(pieces.map(p=>p.type),state.loadouts[state.turn]||[]);
-  if(!rec) return toast("현재 선택 구성으로 가능한 조합이 아님.");
-  pendingCraft=rec.result;
+
+$("#moveMode").onclick = () => {
+  actionMode = "move";
+  uiMode = null;
+  render();
+};
+
+$("#attackMode").onclick = () => {
+  actionMode = "attack";
+  uiMode = null;
+  render();
+};
+
+$("#forgeMode").onclick = () => {
+  if (!state || !canControlTurn()) return;
+  uiMode = uiMode === "forge" ? null : "forge";
+  forgeIds = [];
+  pendingCraft = null;
+  render();
+};
+
+$("#forgeFocusButton").onclick = () => {
+  if (!state || !canControlTurn()) return;
+  uiMode = "forge";
+  forgeIds = [];
+  pendingCraft = null;
+  render();
+  $(".forge-box").scrollIntoView({behavior: "smooth", block: "center"});
+};
+
+$("#forgeReset").onclick = () => {
+  forgeIds = [];
+  pendingCraft = null;
+  render();
+};
+
+$("#forgeCraft").onclick = () => {
+  if (!state || !forgeIds.length) return;
+
+  const pieces = forgeIds.map(id => state.pieces.find(p => p.id === id)).filter(Boolean);
+  if (pieces.some(p => p.controller !== state.turn)) return toast("자기 기물만 재료 가능.");
+
+  const rec = recipeFor(
+    pieces.map(p => p.type),
+    state.loadouts[state.turn] || []
+  );
+
+  if (!rec) return toast("가능한 조합이 아님.");
+
+  pendingCraft = rec.result;
   toast(`${PIECES[rec.result].name} 배치 위치를 선택.`);
   render();
 };
 
-$("#harborMode").onclick=()=>{
-  if(!state||!canControlTurn())return;
-  if(!state.loadouts[state.turn]?.includes("fleet_tree")) return toast("함대류를 선택하지 않음.");
-  if(state.portsPlaced[state.turn]>=3) return toast("항구는 최대 3개.");
-  uiMode="harbor";render();
+$("#harborMode").onclick = () => {
+  if (!state || !canControlTurn()) return;
+  if (!state.loadouts[state.turn]?.includes("fleet_tree")) return toast("함대류를 선택하지 않음.");
+  if (state.portsPlaced[state.turn] >= 3) return toast("항구는 최대 3개.");
+
+  uiMode = "harbor";
+  render();
 };
-$("#princeMode").onclick=()=>{
-  if(!state||!canControlTurn())return;
-  if(!canAppointPrince(state,state.turn)) return toast("왕 사망 후 4턴이 지나야 함.");
-  uiMode="prince";render();
+
+$("#princeMode").onclick = () => {
+  if (!state || !canControlTurn()) return;
+  if (!canAppointPrince(state, state.turn)) return toast("왕 사망 후 4턴이 지나야 함.");
+
+  uiMode = "prince";
+  render();
+};
+
+$("#resignButton").onclick = () => {
+  if (!state || state.winner) return;
+  const loser = localMode ? state.turn : myColor;
+  if (!loser || loser === "both") return;
+
+  if (!confirm("정말 기권할까?")) return;
+  state.winner = other(loser);
+  state.log.push(`${loser === "white" ? "백" : "흑"} 기권.`);
+  sendState();
+  render();
 };
 
 function render() {
-  if(!state)return;
-  const viewer=localMode?state.turn:myColor;
-  document.body.dataset.turn=state.turn;
+  if (!state) return;
+
+  const viewer = localMode ? state.turn : myColor;
   statusEl.innerHTML = state.winner
-    ? `<b>${state.winner==="white"?"백":"흑"} 승리</b> — 육지 전체 지배`
-    : `<b>${state.turn==="white"?"백":"흑"} 차례</b> · 수 ${state.ply+1} · 백 ${state.ownTurns.white}턴 / 흑 ${state.ownTurns.black}턴`;
+    ? `<b>${state.winner === "white" ? "백" : "흑"} 승리</b> · 육지 전체 지배`
+    : `<b>${state.turn === "white" ? "백" : "흑"} 차례</b> · ${state.ply + 1}수`;
 
-  const selected=currentPiece();
-  document.querySelectorAll(".cell").forEach(cell=>{
-    const r=+cell.dataset.r,c=+cell.dataset.c;
-    cell.className=`cell ${isLand(r,c)?"land":"sea"} terr-${state.territory[key(r,c)]}`;
-    cell.innerHTML="";
+  const selected = currentPiece();
 
-    const h=harborAt(state,r,c);
-    if(h) {
-      const port=document.createElement("span");
-      port.className=`harbor ${h.color}`;
-      port.textContent="항";
+  $$(".cell").forEach(cell => {
+    const r = +cell.dataset.r;
+    const c = +cell.dataset.c;
+    cell.className = `cell ${isLand(r,c) ? "land" : "sea"} terr-${state.territory[key(r,c)]}`;
+    cell.innerHTML = "";
+
+    const h = harborAt(state, r, c);
+    if (h) {
+      const port = document.createElement("span");
+      port.className = `harbor ${h.color}`;
+      port.textContent = "항";
       cell.appendChild(port);
     }
 
-    const p=at(state,r,c);
-    if(p && isVisibleTo(state,p,viewer)) {
-      const chip=document.createElement("span");
-      chip.className=`piece ${p.controller} ${p.prince?"prince":""}`;
-      chip.textContent=PIECES[p.type].symbol;
-      chip.title=`${PIECES[p.type].name} HP ${p.hp}`;
+    const p = at(state, r, c);
+    if (p && isVisibleTo(state, p, viewer)) {
+      const chip = document.createElement("span");
+      chip.className = `piece ${p.controller} ${p.prince ? "prince" : ""}`;
+      chip.textContent = PIECES[p.type].symbol;
+      chip.title = `${PIECES[p.type].name} HP ${p.hp}`;
       cell.appendChild(chip);
-      if(p.hp!==maxHp(p,state)) {
-        const hp=document.createElement("small");
-        hp.className="hp";hp.textContent=p.hp;
+
+      if (p.hp !== maxHp(p, state)) {
+        const hp = document.createElement("small");
+        hp.className = "hp";
+        hp.textContent = p.hp;
         cell.appendChild(hp);
       }
     }
 
-    if(selected && selected.id===p?.id) cell.classList.add("selected-piece");
-    if(forgeIds.includes(p?.id)) cell.classList.add("forge-selected");
+    if (selected && selected.id === p?.id) cell.classList.add("selected-piece");
+    if (forgeIds.includes(p?.id)) cell.classList.add("forge-selected");
 
-    if(selected && !uiMode && canControlTurn()) {
-      if(actionMode==="move" && canMove(state,selected,r,c,state.turn)) cell.classList.add("legal-move");
-      if(actionMode==="attack" && canAttackPoint(state,selected,r,c,state.turn)) cell.classList.add("legal-attack");
+    if (selected && !uiMode && canControlTurn()) {
+      if (actionMode === "move" && canMove(state, selected, r, c, state.turn)) {
+        cell.classList.add("legal-move");
+      }
+      if (actionMode === "attack" && canAttackPoint(state, selected, r, c, state.turn)) {
+        cell.classList.add("legal-attack");
+      }
     }
-    if(uiMode==="harbor" && canInstallHarbor(state,state.turn,r,c)) cell.classList.add("legal-harbor");
-    if(pendingCraft && canPlaceCraft(state,state.turn,pendingCraft,r,c)) cell.classList.add("legal-craft");
+
+    if (uiMode === "harbor" && canInstallHarbor(state, state.turn, r, c)) {
+      cell.classList.add("legal-harbor");
+    }
+    if (pendingCraft && canPlaceCraft(state, state.turn, pendingCraft, r, c)) {
+      cell.classList.add("legal-craft");
+    }
   });
 
-  $("#moveMode").classList.toggle("active",actionMode==="move");
-  $("#attackMode").classList.toggle("active",actionMode==="attack");
-  $("#endAction").classList.toggle("hidden",!subAction);
-  $("#forgePanel").classList.toggle("hidden",uiMode!=="forge" && !pendingCraft);
+  $("#moveMode").classList.toggle("active", actionMode === "move");
+  $("#attackMode").classList.toggle("active", actionMode === "attack");
+  $("#forgeMode").classList.toggle("active", uiMode === "forge");
+  $("#endAction").classList.toggle("hidden", !subAction);
 
-  const load=state.loadouts[state.turn]||[];
-  $("#turnLoadout").textContent=load.map(x=>LOADOUTS.find(y=>y[0]===x)?.[1]||x).join(" · ");
-  $("#harborCount").textContent=`${state.portsPlaced[state.turn]}/3`;
+  const load = state.loadouts[state.turn] || [];
+  $("#turnLoadout").textContent = load
+    .map(x => LOADOUTS.find(y => y[0] === x)?.[1] || x)
+    .join(" · ");
 
+  $("#harborCount").textContent = `${state.portsPlaced[state.turn]}/3`;
+
+  renderPlayers();
   renderSide(selected);
   renderForge();
-  logEl.innerHTML=state.log.slice().reverse().map(x=>`<div>${escapeHtml(x)}</div>`).join("");
+  renderLog();
+}
+
+function renderPlayers() {
+  const box = $("#gamePlayers");
+  box.innerHTML = `
+    <div class="game-player-row ${state.turn === "white" ? "turn" : ""}">
+      <span>Player 1 · 백</span><span>${state.turn === "white" ? "TURN" : ""}</span>
+    </div>
+    <div class="game-player-row ${state.turn === "black" ? "turn" : ""}">
+      <span>Player 2 · 흑</span><span>${state.turn === "black" ? "TURN" : ""}</span>
+    </div>
+  `;
 }
 
 function renderSide(p) {
-  if(!p) {
-    sideEl.innerHTML=`<h3>기물 정보</h3><p class="muted">기물을 클릭.</p>`;
+  if (!p) {
+    sideEl.innerHTML = `<div class="rail-title">기물</div><p class="muted">기물을 클릭하면 정보가 표시됨.</p>`;
     return;
   }
-  const d=pieceDef(p);
-  const confused=isConfused(state,p);
-  const tr=confused?["혼란"]:traitNames(effectiveTraits(state,p));
-  sideEl.innerHTML=`
-    <h3>${d.name}${p.prince?" · 왕자":""}</h3>
+
+  const d = pieceDef(p);
+  const confused = isConfused(state, p);
+  const tr = confused ? ["혼란"] : traitNames(effectiveTraits(state, p));
+
+  sideEl.innerHTML = `
+    <h3>${d.name}${p.prince ? " · 왕자" : ""}</h3>
     <div class="statrow"><span>체력</span><b>${p.hp} / ${maxHp(p,state)}</b></div>
     <div class="statrow"><span>공격력</span><b>${attackPower(state,p)}</b></div>
-    <div class="tags">${tr.length?tr.map(x=>`<span>${x}</span>`).join(""):"<span>특성 없음</span>"}</div>
-    <p class="muted">${p.synthetic?"합성 기물":"기본 기물"} · ${d.naval?"해상":"지상"}</p>
-    ${p.cooldownUntilOwnTurn>state.ownTurns[p.color]?`<p class="danger">폭주 쿨다운</p>`:""}
-    ${isOverwhelmed(state,p)?`<p class="danger">압도 상태: 공격 불가</p>`:""}
+    <div class="tags">${tr.length ? tr.map(x => `<span>${x}</span>`).join("") : "<span>특성 없음</span>"}</div>
+    <p class="muted">${p.synthetic ? "합성 기물" : "기본 기물"} · ${d.naval ? "해상" : "지상"}</p>
+    ${p.cooldownUntilOwnTurn > state.ownTurns[p.color] ? `<p class="danger">폭주 쿨다운</p>` : ""}
+    ${isOverwhelmed(state,p) ? `<p class="danger">압도: 공격 불가</p>` : ""}
     <div id="abilityButtons"></div>
   `;
-  const ab=$("#abilityButtons");
-  if(p.type==="hypnotist" && p.controller===state.turn && !confused) {
-    const b=document.createElement("button");b.textContent="최면 사용";b.onclick=()=>{uiMode="hypnosis";render();};ab.appendChild(b);
+
+  const ab = $("#abilityButtons");
+
+  if (p.type === "hypnotist" && p.controller === state.turn && !confused) {
+    const b = document.createElement("button");
+    b.textContent = "최면 사용";
+    b.onclick = () => { uiMode = "hypnosis"; render(); };
+    ab.appendChild(b);
   }
-  if(p.type==="commander" && p.controller===state.turn && !confused) {
-    const a=document.createElement("button");a.textContent="최후의 저항";a.onclick=()=>{uiMode="commandLast";render();};
-    const b=document.createElement("button");b.textContent="무차별 공격";b.onclick=()=>{uiMode="commandInd";render();};
-    ab.append(a,b);
+
+  if (p.type === "commander" && p.controller === state.turn && !confused) {
+    const a = document.createElement("button");
+    a.textContent = "최후의 저항";
+    a.onclick = () => { uiMode = "commandLast"; render(); };
+
+    const b = document.createElement("button");
+    b.textContent = "무차별 공격";
+    b.onclick = () => { uiMode = "commandInd"; render(); };
+
+    ab.append(a, b);
   }
 }
 
 function renderForge() {
-  const names=forgeIds.map(id=>state.pieces.find(p=>p.id===id)).filter(Boolean).map(p=>PIECES[p.type].name);
-  $("#forgeItems").textContent=names.length?names.join(" + "):"재료 없음";
-  const rec=recipeFor(forgeIds.map(id=>state.pieces.find(p=>p.id===id)?.type).filter(Boolean),state.loadouts[state.turn]||[]);
-  $("#forgeResult").textContent=pendingCraft?`배치 대기: ${PIECES[pendingCraft].name}`:(rec?`결과: ${PIECES[rec.result].name}`:"결과: -");
-  $("#forgeCraft").disabled=!rec || !!pendingCraft;
+  const selectedPieces = forgeIds
+    .map(id => state.pieces.find(p => p.id === id))
+    .filter(Boolean);
+
+  const names = selectedPieces.map(p => PIECES[p.type].name);
+  $("#forgeItems").textContent = names.length ? names.join(" + ") : "재료 없음";
+
+  const rec = recipeFor(
+    selectedPieces.map(p => p.type),
+    state.loadouts[state.turn] || []
+  );
+
+  $("#forgeResult").textContent = pendingCraft
+    ? `배치 대기: ${PIECES[pendingCraft].name}`
+    : rec ? `결과: ${PIECES[rec.result].name}` : "결과: -";
+
+  $("#forgeOutput").textContent = pendingCraft
+    ? PIECES[pendingCraft].symbol
+    : rec ? PIECES[rec.result].symbol : "?";
+
+  $$("#forgeSlots > div").forEach((slot, i) => {
+    slot.classList.toggle("filled", i < forgeIds.length);
+  });
+
+  $("#forgeCraft").disabled = !rec || !!pendingCraft;
 }
 
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));}
+function renderLog() {
+  const rows = state.log.slice().reverse();
+  logEl.innerHTML = rows
+    .map((x, i) => `<div><span>${Math.max(1, state.ply - i)}</span><span>${escapeHtml(x)}</span></div>`)
+    .join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, m => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[m]));
+}
+
+showScreen("main");
+ensureSocket().catch(() => setNetworkText("오프라인"));

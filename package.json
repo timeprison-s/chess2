@@ -1,8 +1,7 @@
 {
   "name": "gaejamchess-alpha",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
-  "description": "개잼체스 1.0 alpha",
   "scripts": {
     "start": "node server.js"
   },
