@@ -580,11 +580,14 @@ function attackPoint(state,p,tr,tc,viewer) {
     p.cooldownUntilOwnTurn = state.ownTurns[p.color] + 2;
   }
 
-  // 이동공격: 실제 대상이 있었고 처치했을 때만 진입
-  if (mode.moving && primaryWasThere && primaryKilled) {
+  // 기본 공격 규칙:
+  // "제자리 공격/포격(stationary)"이라고 명시된 공격만 제자리에 남는다.
+  // 그 외 공격은 이번 타격으로 대상이 죽으면 공격자가 그 칸으로 진입한다.
+  if (!mode.stationary && primaryWasThere && primaryKilled) {
     const still = state.pieces.find(x=>x.id===p.id);
     if (still && !at(state,tr,tc) && domainAllowsMove(state,still,tr,tc)) {
-      still.r=tr; still.c=tc;
+      still.r=tr;
+      still.c=tc;
       captureTerritory(state,still,tr,tc);
       destroyEnemyHarborOnEntry(state,still,tr,tc);
       checkVictory(state);
